@@ -12,7 +12,7 @@
 
 | Destination | Link |
 |---|---|
-| 📱 Mobile Prototype | https://gmartinezgil.github.io/to-the-moon/mobile |
+| 📱 Mobile Prototype | https://gmartinezgil.github.io/ |
 
 ---
 
