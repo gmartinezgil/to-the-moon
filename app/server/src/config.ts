@@ -1,0 +1,14 @@
+export const config = {
+  port: Number(process.env.PORT ?? 3001),
+  host: process.env.HOST ?? '127.0.0.1',
+  dbPath: process.env.DB_PATH ?? new URL('../data/app.db', import.meta.url).pathname,
+  priceProvider: (process.env.PRICE_PROVIDER ?? 'auto') as 'auto' | 'mock' | 'bitso' | 'coingecko',
+  banxicoToken: process.env.BANXICO_TOKEN ?? '',
+  bitsoApiKey: process.env.BITSO_API_KEY ?? '',
+  bitsoApiSecret: process.env.BITSO_API_SECRET ?? '',
+  lnHost: process.env.LN_HOST ?? '',
+  lnApiKey: process.env.LN_API_KEY ?? '',
+  bitrefillApiKey: process.env.BITREFILL_API_KEY ?? '',
+  dcaIntervalMs: Number(process.env.DCA_INTERVAL_MS ?? 30000),
+  mockSeedPrice: Number(process.env.MOCK_SEED_PRICE ?? 1325400),
+} as const;

@@ -1,0 +1,48 @@
+# To The Moon — App Implementation
+
+Full-stack implementation of the To The Moon Bitcoin finance prototype.
+
+## Layout
+
+- `server/` — Fastify + TypeScript API. Owns all secrets, provider adapters, SQLite persistence.
+- `web/` — Vite + React + Tailwind frontend (port of the demo prototype's 4 screens).
+
+## Run
+
+Requires Node 22.5+ (uses the built-in `node:sqlite` module).
+
+```bash
+npm install
+npm run dev
+```
+
+- API: http://localhost:3001/api
+- Web: http://localhost:5173 (proxies `/api` to the server)
+
+## Provider model
+
+Every external integration sits behind a provider interface in `server/src/providers/` with
+a mock implementation as the default. Live providers activate automatically when the matching
+env var is present — no mocks or live code changes needed to wire a credential later.
+
+| Provider | Interface | Live adapter | Env vars |
+|---|---|---|---|
+| BTC/MXN price | `PriceProvider` | Bitso (public), CoinGecko | `PRICE_PROVIDER` (`auto`\|`mock`\|`bitso`\|`coingecko`) |
+| Inflation | `InflationProvider` | Banxico SIE | `BANXICO_TOKEN` |
+| Buy/sell BTC | `ExchangeProvider` | Bitso Trading | `BITSO_API_KEY` + `BITSO_API_SECRET` |
+| Lightning | `LightningProvider` | LNBits | `LN_HOST` + `LN_API_KEY` |
+| Gift cards | `MarketplaceProvider` | Bitrefill | `BITREFILL_API_KEY` |
+| Collateral loans | `LoanProvider` | — (partner/DeFi, stub) | — |
+
+## API surface
+
+- `GET /api/price` — live quote + 30-day history
+- `GET /api/wallet`, `POST /api/wallet/add|buy|sell`, `GET /api/wallet/deposit`
+- `GET /api/lightning`, `POST /api/lightning/invoices`, `POST /api/lightning/pay`
+- `GET /api/inflation`
+- `POST /api/retirement/estimate`
+- `GET /api/market/products`, `POST /api/market/purchase`
+- `GET /api/loan/quote`
+- `GET /api/dca`, `POST /api/dca`, `DELETE /api/dca/:id`
+
+See `docs/implementation-plan.md` in the repo root for the full feature map.

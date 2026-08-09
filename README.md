@@ -86,6 +86,7 @@ The platform combines:
 - 📄 [Investor Deck](./docs/investor-deck.pdf)
 - 📘 [Whitepaper](./docs/whitepaper.pdf)
 - 🧠 [Architecture Notes](./docs/architecture.md)
+- 🛠 [Implementation Plan](./docs/implementation-plan.md)
 
 ---
 
