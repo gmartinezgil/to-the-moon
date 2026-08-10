@@ -82,8 +82,16 @@ with a live integration.
 
 ## Delivery phases
 
-1. **Phase 0** — backend skeleton, Postgres schema, live price feed, charts
-2. **Phase 1** — on-chain wallet, deposit addresses, real balances
+> Status is tracked against the live implementation in `app/` (monorepo: Fastify + TypeScript
+> API, SQLite via `node:sqlite`, Vite + React + Tailwind web). Phase 0 and 1 are built.
+
+1. **Phase 0 — DONE** — monorepo skeleton (`app/server`, `app/web`), SQLite schema, live price
+   feed (Bitso → CoinGecko → mock fallback), all provider interfaces + mocks, full API surface,
+   DCA cron, Retirement engine, Inflation Shield, Bitrefill market, loan LTV quote
+2. **Phase 1 — DONE** — HD wallet (BIP84 P2WPKH, `m/84'/0'/0'/0/i`, mnemonic persisted in
+   SQLite), deposit address + QR in Payments, UTXO/balance sync via Mempool.space
+   (`ONCHAIN_PROVIDER=mempool`) or mock (simulated deposits), PSBT-signed sends with fee
+   estimation and change
 3. **Phase 2** — Bitso buy/sell + SPEI deposit + DCA cron
 4. **Phase 3** — Lightning node, send/receive, activity ledger
 5. **Phase 4** — Bitrefill + Ledn integrations

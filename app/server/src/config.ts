@@ -3,6 +3,7 @@ export const config = {
   host: process.env.HOST ?? '127.0.0.1',
   dbPath: process.env.DB_PATH ?? new URL('../data/app.db', import.meta.url).pathname,
   priceProvider: (process.env.PRICE_PROVIDER ?? 'auto') as 'auto' | 'mock' | 'bitso' | 'coingecko',
+  onchainProvider: (process.env.ONCHAIN_PROVIDER ?? 'mock') as 'auto' | 'mock' | 'mempool',
   banxicoToken: process.env.BANXICO_TOKEN ?? '',
   bitsoApiKey: process.env.BITSO_API_KEY ?? '',
   bitsoApiSecret: process.env.BITSO_API_SECRET ?? '',

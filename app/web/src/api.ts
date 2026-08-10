@@ -16,6 +16,7 @@ export interface Balances {
   fiatMxn: number;
   btc: number;
   sats: number;
+  onchainSats: number;
   totalMxn: number;
 }
 
@@ -96,6 +97,17 @@ export interface LoanQuote {
   terms: string;
 }
 
+export interface OnChainData {
+  address: string;
+  addressIndex: number;
+  outputScript: string;
+  balanceSats: number;
+  provider: string;
+  syncedAt: string;
+  btcPriceMxn: number;
+  fiatValueMxn: number;
+}
+
 export interface DcaSchedule {
   id: number;
   amount_fiat: number;
@@ -125,6 +137,11 @@ export const api = {
   buy: (amountMxn: number) => request<{ ok: boolean; btc: number; price: number }>('/wallet/buy', { method: 'POST', body: JSON.stringify({ amountMxn }) }),
   sell: (amountBtc: number) => request<{ ok: boolean; fiat: number; price: number }>('/wallet/sell', { method: 'POST', body: JSON.stringify({ amountBtc }) }),
   deposit: () => request<{ clabe: string; institution: string }>('/wallet/deposit'),
+  onchain: () => request<OnChainData>('/wallet/onchain'),
+  simulateOnchainDeposit: (amountSats: number) =>
+    request<{ ok: boolean; state: OnChainData }>('/onchain/simulate-deposit', { method: 'POST', body: JSON.stringify({ amountSats }) }),
+  sendOnchain: (to: string, amountSats: number) =>
+    request<{ ok: boolean; txid: string; feeSats: number }>('/onchain/send', { method: 'POST', body: JSON.stringify({ to, amountSats }) }),
   lightning: () => request<LightningData>('/lightning'),
   createInvoice: (amountSats: number, memo: string) =>
     request<{ ok: boolean; invoice: LightningInvoice }>('/lightning/invoices', { method: 'POST', body: JSON.stringify({ amountSats, memo }) }),

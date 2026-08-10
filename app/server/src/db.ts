@@ -51,6 +51,19 @@ function migrate(db: DatabaseSync) {
       redemption_code TEXT,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS wallet_keys (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      mnemonic TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS wallet_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      address TEXT NOT NULL DEFAULT '',
+      address_index INTEGER NOT NULL DEFAULT 0,
+      balance_sats INTEGER NOT NULL DEFAULT 0,
+      last_sync_at TEXT
+    );
   `);
   seed(db);
 }
@@ -61,6 +74,11 @@ function seed(db: DatabaseSync) {
     db.prepare('INSERT INTO balances (id, fiat_mxn, btc, sats) VALUES (1, ?, ?, ?)').run(
       25000, 0.015, 125000,
     );
+  }
+  const state = db.prepare('SELECT COUNT(*) AS n FROM wallet_state').get() as { n: number };
+  if (state.n === 0) {
+    db.prepare('INSERT INTO wallet_state (id, address, address_index, balance_sats) VALUES (1, ?, 0, 0)')
+      .run('');
   }
 }
 

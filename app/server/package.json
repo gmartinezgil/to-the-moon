@@ -9,6 +9,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@scure/bip32": "^2.3.0",
+    "@scure/bip39": "^2.3.0",
+    "bitcoinjs-lib": "^7.0.1",
     "fastify": "^5.2.0"
   },
   "devDependencies": {

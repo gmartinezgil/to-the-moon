@@ -3,6 +3,7 @@ import type { AppContext } from './context';
 import { getBalances, getTransactions, addFiat, buyBtc, sellBtc, getDepositInstructions } from './services/wallet';
 import { estimateRetirement } from './services/retirement';
 import { listSchedules, createSchedule, deleteSchedule } from './services/dca';
+import { syncOnchain, simulateDeposit, sendOnchain } from './services/onchain';
 
 function num(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -85,6 +86,36 @@ export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/api/wallet/deposit', handle(async () => {
     return await getDepositInstructions(ctx);
   }));
+
+  // On-chain wallet
+  app.get('/api/wallet/onchain', handle(async () => {
+    const [state, quote] = await Promise.all([syncOnchain(ctx), ctx.price.getQuote()]);
+    return { ...state, btcPriceMxn: quote.btcPriceMxn, fiatValueMxn: (state.balanceSats / 100_000_000) * quote.btcPriceMxn };
+  }));
+
+  app.post('/api/onchain/simulate-deposit', async (req: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const amountSats = reqNum(req, 'amountSats');
+      const state = await simulateDeposit(ctx, amountSats);
+      return { ok: true, state };
+    } catch (err) {
+      fail(reply, err as Error);
+      return undefined;
+    }
+  });
+
+  app.post('/api/onchain/send', async (req: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const body = asBody(req);
+      if (typeof body.to !== 'string') throw new Error('to address required');
+      const amountSats = reqNum(req, 'amountSats');
+      const result = await sendOnchain(ctx, body.to, amountSats);
+      return { ok: true, ...result };
+    } catch (err) {
+      fail(reply, err as Error);
+      return undefined;
+    }
+  });
 
   // Lightning
   app.get('/api/lightning', handle(async () => {

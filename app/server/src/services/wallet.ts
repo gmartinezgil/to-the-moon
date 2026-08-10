@@ -1,10 +1,12 @@
 import type { AppContext } from '../context';
 import { nowIso } from '../db';
+import { getCachedOnChainSats } from './onchain';
 
 export interface Balances {
   fiatMxn: number;
   btc: number;
   sats: number;
+  onchainSats: number;
   totalMxn: number;
 }
 
@@ -12,11 +14,14 @@ export async function getBalances(ctx: AppContext, btcPriceMxn: number): Promise
   const row = ctx.db.prepare('SELECT fiat_mxn, btc, sats FROM balances WHERE id = 1').get() as {
     fiat_mxn: number; btc: number; sats: number;
   };
+  const onchainSats = getCachedOnChainSats(ctx);
+  const btcTotal = row.btc + onchainSats / 100_000_000;
   return {
     fiatMxn: row.fiat_mxn,
     btc: row.btc,
     sats: row.sats,
-    totalMxn: row.fiat_mxn + row.btc * btcPriceMxn,
+    onchainSats,
+    totalMxn: row.fiat_mxn + btcTotal * btcPriceMxn,
   };
 }
 

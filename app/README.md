@@ -33,11 +33,17 @@ env var is present — no mocks or live code changes needed to wire a credential
 | Lightning | `LightningProvider` | LNBits | `LN_HOST` + `LN_API_KEY` |
 | Gift cards | `MarketplaceProvider` | Bitrefill | `BITREFILL_API_KEY` |
 | Collateral loans | `LoanProvider` | — (partner/DeFi, stub) | — |
+| On-chain wallet | `OnChainProvider` | Mempool.space | `ONCHAIN_PROVIDER` (`mock`\|`auto`\|`mempool`) |
+
+The on-chain wallet is mock by default (simulated deposits via the Deposit button). Set
+`ONCHAIN_PROVIDER=mempool` for a real mainnet wallet: the app derives a fresh BIP84 (P2WPKH)
+address from a locally generated mnemonic, syncs balance/UTXOs, and signs/sweeps with a PSBT.
 
 ## API surface
 
 - `GET /api/price` — live quote + 30-day history
 - `GET /api/wallet`, `POST /api/wallet/add|buy|sell`, `GET /api/wallet/deposit`
+- `GET /api/wallet/onchain`, `POST /api/onchain/simulate-deposit`, `POST /api/onchain/send`
 - `GET /api/lightning`, `POST /api/lightning/invoices`, `POST /api/lightning/pay`
 - `GET /api/inflation`
 - `POST /api/retirement/estimate`

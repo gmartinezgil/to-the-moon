@@ -1,20 +1,24 @@
 import { useEffect, useState } from 'react';
-import { api, type LightningData, type LightningInvoice, type MarketProduct, type PriceQuote } from '../api';
+import { QRCodeSVG } from 'qrcode.react';
+import { api, type LightningData, type LightningInvoice, type MarketProduct, type OnChainData, type PriceQuote } from '../api';
 import { AmountInput, BigButton, Modal, Pill, SectionTitle } from '../components/ui';
 import { mxn, sats } from '../format';
 
 export default function Payments({ quote }: { quote: PriceQuote }) {
   const [lightning, setLightning] = useState<LightningData | null>(null);
+  const [onchain, setOnchain] = useState<OnChainData | null>(null);
   const [products, setProducts] = useState<MarketProduct[]>([]);
-  const [modal, setModal] = useState<'send' | 'receive' | null>(null);
+  const [modal, setModal] = useState<'send' | 'receive' | 'onchain-send' | 'onchain-receive' | null>(null);
   const [bolt11, setBolt11] = useState('');
   const [satsAmount, setSatsAmount] = useState('');
+  const [sendTo, setSendTo] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [invoice, setInvoice] = useState<LightningInvoice | null>(null);
 
   const refresh = () => {
     api.lightning().then(setLightning).catch(() => {});
+    api.onchain().then(setOnchain).catch(() => {});
     api.marketProducts().then((r) => setProducts(r.products)).catch(() => {});
   };
 
@@ -50,6 +54,44 @@ export default function Payments({ quote }: { quote: PriceQuote }) {
     try {
       const res = await api.createInvoice(amount, 'Receive via LN');
       setInvoice(res.invoice);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onchainSend = async () => {
+    const amount = Number(satsAmount);
+    if (!Number.isFinite(amount) || amount <= 0) return setError('Enter sats to send');
+    if (sendTo.length < 20) return setError('Enter a valid bitcoin address');
+    setBusy(true);
+    setError('');
+    try {
+      const res = await api.sendOnchain(sendTo, amount);
+      setSendTo('');
+      setSatsAmount('');
+      setModal(null);
+      refresh();
+      alert(`On-chain sent! txid ${res.txid} (fee ${res.feeSats} sats)`);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onchainSimulate = async () => {
+    const amount = Number(satsAmount);
+    if (!Number.isFinite(amount) || amount <= 0) return setError('Enter sats to deposit');
+    setBusy(true);
+    setError('');
+    try {
+      const res = await api.simulateOnchainDeposit(amount);
+      setOnchain(res.state);
+      setSatsAmount('');
+      setModal(null);
+      alert(`Deposited ${sats(amount)} sats on-chain (demo)`);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -119,6 +161,35 @@ export default function Payments({ quote }: { quote: PriceQuote }) {
             Receive
           </div>
         </div>
+
+        <div className="mt-6 bg-black rounded-3xl p-4 flex items-center justify-between">
+          <div className="text-[#FFDE3A]">
+            <p className="text-[10px] font-black uppercase tracking-widest opacity-70">On-Chain Vault</p>
+            <p className="comfortaa text-2xl font-bold mt-1">{onchain ? sats(onchain.balanceSats) : '—'} <span className="text-sm">sats</span></p>
+            <p className="text-xs font-bold opacity-70 mt-0.5">≈ {mxn(onchain?.fiatValueMxn ?? 0, 2)}</p>
+          </div>
+          <div className="flex flex-col gap-2">
+            <div
+              onClick={() => {
+                setModal('onchain-receive');
+                setSatsAmount('');
+              }}
+              className="bg-[#FFDE3A] text-black px-4 py-2 rounded-full font-black text-xs text-center cursor-pointer active:scale-95 transition-transform"
+            >
+              Deposit
+            </div>
+            <div
+              onClick={() => {
+                setModal('onchain-send');
+                setSatsAmount('');
+                setSendTo('');
+              }}
+              className="bg-white text-black px-4 py-2 rounded-full font-black text-xs text-center cursor-pointer active:scale-95 transition-transform"
+            >
+              Withdraw
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="bottom-sheet no-scrollbar pb-32">
@@ -182,8 +253,19 @@ export default function Payments({ quote }: { quote: PriceQuote }) {
 
       {modal && (
         <Modal
-          title={modal === 'receive' ? 'Receive Bitcoin' : 'Send Bitcoin'}
-          subtitle={modal === 'receive' ? 'Lightning or On-Chain' : 'Enter address or scan QR.'}
+          title={
+            modal === 'receive' || modal === 'onchain-receive'
+              ? 'Receive Bitcoin'
+              : modal === 'onchain-send'
+                ? 'Withdraw Bitcoin'
+                : 'Send Bitcoin'
+          }
+          subtitle={
+            modal === 'receive' ? 'Lightning or On-Chain'
+            : modal === 'onchain-receive' ? 'Deposit to your on-chain vault'
+            : modal === 'onchain-send' ? 'Send from your on-chain vault'
+            : 'Enter address or scan QR.'
+          }
           onClose={() => setModal(null)}
         >
           {modal === 'receive' ? (
@@ -202,6 +284,53 @@ export default function Payments({ quote }: { quote: PriceQuote }) {
               )}
               <BigButton onClick={receive} disabled={busy}>
                 {busy ? 'Creating…' : 'Create Invoice'}
+              </BigButton>
+            </div>
+          ) : modal === 'onchain-receive' ? (
+            <div className="text-center">
+              {onchain && (
+                <>
+                  <div className="bg-white p-4 inline-block rounded-3xl border-4 border-black mb-4 mt-2">
+                    <QRCodeSVG value={onchain.address} size={140} bgColor="#ffffff" fgColor="#000000" />
+                  </div>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Vault Address</p>
+                  <p className="text-[11px] font-bold text-black break-all bg-slate-100 p-3 rounded-xl mb-4">{onchain.address}</p>
+                </>
+              )}
+              <div className="text-left">
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Demo: simulate a deposit</p>
+                <AmountInput prefix="₿" value={satsAmount} onChange={setSatsAmount} placeholder="sats" />
+              </div>
+              <p className="text-[10px] font-bold text-red-500 uppercase px-2 my-3 h-3">{error}</p>
+              <BigButton onClick={onchainSimulate} disabled={busy}>
+                {busy ? 'Depositing…' : 'Simulate Deposit'}
+              </BigButton>
+            </div>
+          ) : modal === 'onchain-send' ? (
+            <div>
+              <div className="bg-slate-100 rounded-2xl p-4 flex items-center mb-4">
+                <input
+                  type="text"
+                  value={sendTo}
+                  onChange={(e) => setSendTo(e.target.value)}
+                  placeholder="bc1q..."
+                  className="bg-transparent text-sm font-bold text-black outline-none w-full"
+                  autoFocus
+                />
+              </div>
+              <div className="bg-slate-100 rounded-2xl p-4 flex items-center mb-2">
+                <span className="font-black text-xl text-slate-400 mr-2">sats</span>
+                <input
+                  type="number"
+                  value={satsAmount}
+                  onChange={(e) => setSatsAmount(e.target.value)}
+                  placeholder="0"
+                  className="bg-transparent text-3xl font-extrabold text-black outline-none w-full"
+                />
+              </div>
+              <p className="text-[10px] font-bold text-red-500 uppercase px-2 mb-6 h-3">{error}</p>
+              <BigButton onClick={onchainSend} variant="yellow" disabled={busy}>
+                {busy ? 'Broadcasting…' : 'Confirm Withdraw'}
               </BigButton>
             </div>
           ) : (

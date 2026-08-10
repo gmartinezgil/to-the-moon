@@ -101,3 +101,29 @@ export interface LoanProvider {
   readonly name: string;
   quote(collateralBtc: number, priceMxn: number): Promise<LoanQuote>;
 }
+
+export interface OnChainUtxo {
+  txid: string;
+  vout: number;
+  valueSats: number;
+  confirmations: number;
+}
+
+export interface OnChainTx {
+  txid: string;
+  direction: 'in' | 'out';
+  valueSats: number;
+  confirmations: number;
+  blocktime: number;
+}
+
+export interface OnChainProvider {
+  readonly name: string;
+  getBalanceSats(address: string): Promise<number>;
+  getUtxos(address: string): Promise<OnChainUtxo[]>;
+  getTransactions(address: string): Promise<OnChainTx[]>;
+  estimateFeeSatPerVb(): Promise<number>;
+  broadcast(rawTxHex: string): Promise<string>;
+  /** Demo-only hook. Live providers omit it. */
+  simulateDeposit?(address: string, amountSats: number): Promise<void>;
+}
