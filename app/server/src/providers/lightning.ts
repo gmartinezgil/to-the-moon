@@ -55,6 +55,19 @@ export class MockLightningProvider implements LightningProvider {
   async getActivity() {
     return this.activity;
   }
+
+  async getInvoiceStatus(paymentHash: string) {
+    return this.invoices.get(paymentHash)?.isPaid ?? false;
+  }
+
+  async markPaid(paymentHash: string) {
+    const inv = this.invoices.get(paymentHash);
+    if (!inv || inv.paid) return;
+    inv.paid = true;
+    inv.isPaid = true;
+    this.balanceSats += inv.amountSats;
+    this.activity = [{ direction: 'in', amountSats: inv.amountSats, memo: inv.memo || 'Received via LN', createdAt: new Date().toISOString() }, ...this.activity];
+  }
 }
 
 export class LnbitsProvider implements LightningProvider {
@@ -95,6 +108,16 @@ export class LnbitsProvider implements LightningProvider {
       createdAt: createdAt.toISOString(),
       expiresAt: new Date(createdAt.getTime() + (res.expiry ?? 900) * 1000).toISOString(),
     };
+  }
+
+  async getInvoiceStatus(paymentHash: string) {
+    const res = await this.call<{ paid: boolean }>(`/api/v1/payments/${paymentHash}`);
+    return !!res.paid;
+  }
+
+  async markPaid() {
+    // LNBits settles invoices and updates wallet balance itself; the webhook
+    // scaffold exists so callers can trigger follow-ups (ledger, notifications).
   }
 
   async payInvoice(bolt11: string, amountSats?: number): Promise<LightningPayment> {

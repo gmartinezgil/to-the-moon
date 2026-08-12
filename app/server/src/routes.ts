@@ -1,8 +1,12 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { AppContext } from './context';
 import { getBalances, getTransactions, addFiat, buyBtc, sellBtc, getDepositInstructions } from './services/wallet';
+import { getLedger } from './services/ledger';
+import { getTaxSummary } from './services/taxes';
+import { getSecurityReport } from './services/security';
+import { getDcaGrowth } from './services/dcaGrowth';
 import { estimateRetirement } from './services/retirement';
-import { listSchedules, createSchedule, deleteSchedule } from './services/dca';
+import { listSchedules, createSchedule, deleteSchedule, isDcaFrequency } from './services/dca';
 import { syncOnchain, simulateDeposit, sendOnchain } from './services/onchain';
 
 function num(value: unknown): number | undefined {
@@ -37,6 +41,11 @@ export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
   };
 
   app.get('/api/health', () => ({ ok: true, time: new Date().toISOString() }));
+
+  // Unified activity ledger
+  app.get('/api/ledger', handle(async () => {
+    return { items: await getLedger(ctx) };
+  }));
 
   app.get('/api/price', handle(async () => {
     const [quote, history] = await Promise.all([ctx.price.getQuote(), ctx.price.getHistory(30)]);
@@ -160,6 +169,38 @@ export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
     }
   });
 
+  app.get('/api/lightning/invoices/:paymentHash', async (req: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const paymentHash = (req.params as { paymentHash?: string }).paymentHash ?? '';
+      if (!paymentHash) throw new Error('paymentHash required');
+      const isPaid = ctx.lightning.getInvoiceStatus
+        ? await ctx.lightning.getInvoiceStatus(paymentHash)
+        : false;
+      return { ok: true, isPaid };
+    } catch (err) {
+      fail(reply, err as Error);
+      return undefined;
+    }
+  });
+
+  app.post('/api/lightning/webhook', async (req: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const body = asBody(req);
+      const nested = body.body && typeof body.body === 'object' ? body.body as Record<string, unknown> : {};
+      const fromQuery = (req.query as Record<string, unknown>).payment_hash;
+      const paymentHash =
+        (typeof body.payment_hash === 'string' ? body.payment_hash : '') ||
+        (typeof nested.payment_hash === 'string' ? nested.payment_hash : '') ||
+        (typeof fromQuery === 'string' ? fromQuery : '');
+      if (!paymentHash) throw new Error('payment_hash required in webhook body');
+      if (ctx.lightning.markPaid) await ctx.lightning.markPaid(paymentHash);
+      return { ok: true, received: true };
+    } catch (err) {
+      fail(reply, err as Error);
+      return undefined;
+    }
+  });
+
   // Inflation
   app.get('/api/inflation', handle(async () => {
     const snapshot = await ctx.inflation.getSnapshot();
@@ -226,7 +267,11 @@ export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post('/api/dca', async (req: FastifyRequest, reply: FastifyReply) => {
     try {
       const amountFiat = reqNum(req, 'amountFiat');
-      return { schedules: createSchedule(ctx, amountFiat) };
+      const body = asBody(req);
+      if (body.frequency !== undefined && !isDcaFrequency(body.frequency)) {
+        throw new Error('frequency must be daily, weekly or monthly');
+      }
+      return { schedules: createSchedule(ctx, amountFiat, body.frequency) };
     } catch (err) {
       fail(reply, err as Error);
       return undefined;
@@ -244,4 +289,19 @@ export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
       return undefined;
     }
   });
+
+  app.get('/api/dca/growth', handle(async () => {
+    const quote = await ctx.price.getQuote();
+    return { growth: await getDcaGrowth(ctx, quote.btcPriceMxn), btcPriceMxn: quote.btcPriceMxn };
+  }));
+
+  // Taxes
+  app.get('/api/taxes', handle(async () => {
+    return getTaxSummary(ctx);
+  }));
+
+  // Security audit
+  app.get('/api/security', handle(async () => {
+    return await getSecurityReport(ctx);
+  }));
 }

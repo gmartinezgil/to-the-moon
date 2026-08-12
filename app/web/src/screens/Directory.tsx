@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react';
-import { api, type DcaSchedule, type LoanQuote, type PriceQuote } from '../api';
-import { SectionTitle } from '../components/ui';
-import { mxn, sats } from '../format';
+import { api, type DcaFrequency, type DcaSchedule, type LoanQuote, type PriceQuote, type SecurityReport, type TaxSummary } from '../api';
+import { Modal, SectionTitle } from '../components/ui';
+import { btc, mxn, sats } from '../format';
+
+const FREQ_LABEL: Record<DcaFrequency, string> = {
+  daily: 'Daily',
+  weekly: 'Weekly',
+  monthly: 'Monthly',
+};
 
 const TOOLS = [
   { title: 'Banking Alts', icon: 'building-columns', desc: 'APY & Yields' },
@@ -19,8 +25,18 @@ export default function Directory({ quote }: { quote: PriceQuote }) {
   const [fiatToSats, setFiatToSats] = useState('10000');
 
   const [dcaAmount, setDcaAmount] = useState('500');
+  const [dcaFreq, setDcaFreq] = useState<DcaFrequency>('daily');
   const [schedules, setSchedules] = useState<DcaSchedule[]>([]);
   const [dcaMsg, setDcaMsg] = useState('');
+
+  const [toolModal, setToolModal] = useState<'taxes' | 'security' | null>(null);
+  const [taxes, setTaxes] = useState<TaxSummary | null>(null);
+  const [security, setSecurity] = useState<SecurityReport | null>(null);
+
+  useEffect(() => {
+    if (toolModal === 'taxes') api.taxes().then(setTaxes).catch(() => {});
+    if (toolModal === 'security') api.security().then(setSecurity).catch(() => {});
+  }, [toolModal]);
 
   useEffect(() => {
     const n = Number(loanBtc);
@@ -40,9 +56,9 @@ export default function Directory({ quote }: { quote: PriceQuote }) {
     if (!Number.isFinite(n) || n <= 0) return setDcaMsg('Enter a valid amount');
     setDcaMsg('');
     try {
-      const res = await api.createDca(n);
+      const res = await api.createDca(n, dcaFreq);
       setSchedules(res.schedules);
-      setDcaMsg(`Daily buy of ${mxn(n)} scheduled.`);
+      setDcaMsg(`${FREQ_LABEL[dcaFreq]} buy of ${mxn(n)} scheduled.`);
     } catch (err) {
       setDcaMsg((err as Error).message);
     }
@@ -124,7 +140,7 @@ export default function Directory({ quote }: { quote: PriceQuote }) {
           <div className="flex justify-between items-center mb-4">
             <SectionTitle>DCA Auto-Stack</SectionTitle>
             <span className="text-[#FFDE3A] font-bold bg-black px-3 py-1 rounded-full text-[10px] uppercase tracking-widest">
-              Daily
+              Auto
             </span>
           </div>
           <div className="bg-slate-50 border border-slate-100 rounded-3xl p-5">
@@ -133,7 +149,7 @@ export default function Directory({ quote }: { quote: PriceQuote }) {
                 type="number"
                 value={dcaAmount}
                 onChange={(e) => setDcaAmount(e.target.value)}
-                placeholder="MXN per day"
+                placeholder="MXN per period"
                 className="bg-white rounded-2xl px-4 py-3 font-extrabold text-xl outline-none w-full border border-slate-100"
               />
               <button
@@ -143,6 +159,21 @@ export default function Directory({ quote }: { quote: PriceQuote }) {
                 Add
               </button>
             </div>
+            <div className="flex gap-2 mb-4">
+              {(Object.keys(FREQ_LABEL) as DcaFrequency[]).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setDcaFreq(f)}
+                  className={`flex-1 rounded-xl py-2 text-[10px] font-black uppercase tracking-widest transition-colors ${
+                    dcaFreq === f
+                      ? 'bg-black text-[#FFDE3A]'
+                      : 'bg-white text-slate-400 border border-slate-100'
+                  }`}
+                >
+                  {FREQ_LABEL[f]}
+                </button>
+              ))}
+            </div>
             {dcaMsg && <p className="text-[10px] font-bold text-green-600 mb-2 uppercase">{dcaMsg}</p>}
             <div className="space-y-2">
               {schedules.length === 0 && (
@@ -150,7 +181,12 @@ export default function Directory({ quote }: { quote: PriceQuote }) {
               )}
               {schedules.map((s) => (
                 <div key={s.id} className="flex justify-between items-center bg-white rounded-2xl px-4 py-3 border border-slate-100">
-                  <span className="font-bold text-sm text-black">{mxn(s.amount_fiat)} / day</span>
+                  <div>
+                    <span className="font-bold text-sm text-black">{mxn(s.amount_fiat)}</span>
+                    <span className="text-[10px] font-black text-slate-400 uppercase ml-2">
+                      / {FREQ_LABEL[s.frequency] ?? s.frequency}
+                    </span>
+                  </div>
                   <div className="flex items-center gap-3">
                     <span className="text-[10px] text-gray-400 font-bold uppercase">
                       {s.last_run_at ? 'last: ' + new Date(s.last_run_at).toLocaleDateString() : 'starting'}
@@ -171,23 +207,126 @@ export default function Directory({ quote }: { quote: PriceQuote }) {
         <div>
           <SectionTitle>Full Directory</SectionTitle>
           <div className="grid grid-cols-2 gap-4">
-            {TOOLS.map((t, i) => (
-              <div
-                key={i}
-                className="bg-slate-50 border border-slate-100 rounded-3xl p-5 flex flex-col items-center gap-3 active:scale-95 transition-transform cursor-pointer hover:bg-slate-100 text-center"
-              >
-                <div className="w-12 h-12 bg-white shadow-sm rounded-full flex items-center justify-center text-2xl text-black">
-                  <i className={`fa-solid fa-${t.icon}`} />
+            {TOOLS.map((t, i) => {
+              const actionable = t.title === 'Taxes' || t.title === 'Security';
+              return (
+                <div
+                  key={i}
+                  onClick={actionable ? () => setToolModal(t.title === 'Taxes' ? 'taxes' : 'security') : undefined}
+                  className={`bg-slate-50 border border-slate-100 rounded-3xl p-5 flex flex-col items-center gap-3 active:scale-95 transition-transform text-center ${actionable ? 'cursor-pointer hover:bg-slate-100' : ''}`}
+                >
+                  <div className="w-12 h-12 bg-white shadow-sm rounded-full flex items-center justify-center text-2xl text-black">
+                    <i className={`fa-solid fa-${t.icon}`} />
+                  </div>
+                  <div>
+                    <div className="font-bold text-black text-sm">{t.title}</div>
+                    <p className="text-[10px] font-bold text-gray-400 mt-1 uppercase">{t.desc}</p>
+                  </div>
                 </div>
-                <div>
-                  <div className="font-bold text-black text-sm">{t.title}</div>
-                  <p className="text-[10px] font-bold text-gray-400 mt-1 uppercase">{t.desc}</p>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>
+
+      {toolModal && (
+        <Modal
+          title={toolModal === 'taxes' ? 'Capital Gains Tax' : 'Wallet Security Audit'}
+          subtitle={
+            toolModal === 'taxes'
+              ? 'Realized gains from your trade history.'
+              : 'On-chain UTXO audit + system health.'
+          }
+          onClose={() => setToolModal(null)}
+        >
+          {toolModal === 'taxes' && taxes && (
+            <div className="max-h-[420px] overflow-y-auto no-scrollbar">
+              <div className="bg-black rounded-2xl p-4 mb-4 text-white">
+                <p className="text-[10px] font-bold text-gray-400 uppercase">Realized Gain (avg cost)</p>
+                <p className={`text-2xl font-black ${taxes.realizedGainMxn >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {taxes.realizedGainMxn >= 0 ? '+' : ''}{mxn(taxes.realizedGainMxn)}
+                </p>
+                <p className="text-[10px] font-bold text-gray-400 mt-1">Avg cost basis: {mxn(taxes.avgCostMxn)} / BTC</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase">Buys</p>
+                  <p className="text-xl font-black text-black">{taxes.buys.count}</p>
+                  <p className="text-[10px] font-bold text-slate-500">{btc(taxes.buys.btc, 6)} BTC</p>
+                  <p className="text-[10px] font-bold text-slate-500">{mxn(taxes.buys.investedMxn)} invested</p>
+                </div>
+                <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase">Sells</p>
+                  <p className="text-xl font-black text-black">{taxes.sells.count}</p>
+                  <p className="text-[10px] font-bold text-slate-500">{btc(taxes.sells.btc, 6)} BTC</p>
+                  <p className="text-[10px] font-bold text-slate-500">{mxn(taxes.sells.proceedsMxn)} proceeds</p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {taxes.trades.slice(0, 10).map((t) => (
+                  <div key={t.id} className="flex justify-between items-center bg-slate-50 rounded-xl px-3 py-2 border border-slate-100">
+                    <div>
+                      <p className={`font-bold text-xs ${t.kind === 'buy' ? 'text-green-600' : 'text-red-500'}`}>
+                        {t.kind === 'buy' ? 'BUY' : 'SELL'} · {btc(t.amountBtc, 6)} BTC
+                      </p>
+                      <p className="text-[9px] text-gray-400 font-bold uppercase">{new Date(t.createdAt).toLocaleDateString()}</p>
+                    </div>
+                    <p className="text-xs font-bold text-slate-500">{mxn(t.amountFiat)}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {toolModal === 'security' && security && (
+            <div className="max-h-[420px] overflow-y-auto no-scrollbar">
+              <div className="bg-slate-50 rounded-2xl p-4 mb-4 border border-slate-100">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">UTXO Audit</p>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-bold text-black">{security.utxoCount} UTXOs</span>
+                  <span className="text-lg font-black text-black">{sats(security.utxoTotalSats)} sats</span>
+                </div>
+                <div className="flex justify-between items-center mt-1 text-[10px] font-bold text-slate-400 uppercase">
+                  <span>{security.provider}</span>
+                  <span>{btc(security.utxoTotalSats / 100_000_000, 8)} BTC</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mt-3">
+                  <div className="bg-white rounded-xl p-2 text-center border border-slate-100">
+                    <p className="text-xs font-black text-black">{sats(security.confirmedSats)}</p>
+                    <p className="text-[9px] font-bold text-slate-400 uppercase">Confirmed</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-2 text-center border border-slate-100">
+                    <p className="text-xs font-black text-black">{sats(security.unconfirmedSats)}</p>
+                    <p className="text-[9px] font-bold text-slate-400 uppercase">Pending</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-2 text-center border border-slate-100">
+                    <p className="text-xs font-black text-black">{sats(security.largestUtxoSats)}</p>
+                    <p className="text-[9px] font-bold text-slate-400 uppercase">Largest</p>
+                  </div>
+                </div>
+                <p className="text-[9px] text-gray-400 font-bold mt-3 break-all">{security.address}</p>
+              </div>
+              <div className="space-y-2">
+                {security.checks.map((c) => (
+                  <div key={c.label} className="flex items-center justify-between bg-slate-50 rounded-xl px-3 py-2 border border-slate-100">
+                    <div>
+                      <p className="font-bold text-xs text-black">{c.label}</p>
+                      <p className="text-[9px] text-gray-400 font-bold uppercase">{c.detail}</p>
+                    </div>
+                    <span className={`text-lg ${c.ok ? 'text-green-500' : 'text-red-500'}`}>
+                      <i className={`fa-solid ${c.ok ? 'fa-circle-check' : 'fa-circle-exclamation'}`} />
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {toolModal && !(toolModal === 'taxes' ? taxes : security) && (
+            <p className="text-center text-xs font-bold text-gray-400 uppercase py-6">Loading…</p>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }

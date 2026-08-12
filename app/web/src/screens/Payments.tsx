@@ -1,11 +1,46 @@
 import { useEffect, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { api, type LightningData, type LightningInvoice, type MarketProduct, type OnChainData, type PriceQuote } from '../api';
+import { api, type LedgerItem, type LightningData, type LightningInvoice, type MarketProduct, type OnChainData, type PriceQuote } from '../api';
 import { AmountInput, BigButton, Modal, Pill, SectionTitle } from '../components/ui';
 import { mxn, sats } from '../format';
 
+function ledgerStyle(item: LedgerItem): { bg: string; fg: string; icon: string } {
+  if (item.source === 'market') return { bg: 'bg-purple-100', fg: 'text-purple-500', icon: 'fa-gift' };
+  if (item.source === 'onchain') {
+    const incoming = item.direction === 'in';
+    return {
+      bg: incoming ? 'bg-green-100' : 'bg-red-100',
+      fg: incoming ? 'text-green-500' : 'text-red-500',
+      icon: incoming ? 'fa-arrow-down' : 'fa-arrow-up',
+    };
+  }
+  if (item.source === 'lightning') return { bg: 'bg-yellow-100', fg: 'text-yellow-600', icon: 'fa-bolt' };
+  const incoming = item.direction === 'in';
+  return {
+    bg: incoming ? 'bg-green-100' : 'bg-red-100',
+    fg: incoming ? 'text-green-500' : 'text-red-500',
+    icon: incoming ? 'fa-arrow-down' : 'fa-arrow-up',
+  };
+}
+
+function ledgerAmount(item: LedgerItem, price: number): string {
+  const sign = item.direction === 'in' ? '+' : '-';
+  if (item.amountSats) return `${sign}${sats(item.amountSats)} sats`;
+  if (item.amountBtc) return `${sign}${item.amountBtc.toFixed(6)} BTC`;
+  if (item.amountFiat) return `${sign}${mxn(item.amountFiat)}`;
+  return '';
+}
+
+function ledgerFiat(item: LedgerItem, price: number): string {
+  const sign = item.direction === 'in' ? '+' : '-';
+  if (item.amountSats) return `${sign}${mxn((item.amountSats / 100_000_000) * price, 2)}`;
+  if (item.amountBtc) return `${sign}${mxn(item.amountBtc * price, 2)}`;
+  return '';
+}
+
 export default function Payments({ quote }: { quote: PriceQuote }) {
   const [lightning, setLightning] = useState<LightningData | null>(null);
+  const [ledger, setLedger] = useState<LedgerItem[]>([]);
   const [onchain, setOnchain] = useState<OnChainData | null>(null);
   const [products, setProducts] = useState<MarketProduct[]>([]);
   const [modal, setModal] = useState<'send' | 'receive' | 'onchain-send' | 'onchain-receive' | null>(null);
@@ -18,6 +53,7 @@ export default function Payments({ quote }: { quote: PriceQuote }) {
 
   const refresh = () => {
     api.lightning().then(setLightning).catch(() => {});
+    api.ledger().then((r) => setLedger(r.items)).catch(() => {});
     api.onchain().then(setOnchain).catch(() => {});
     api.marketProducts().then((r) => setProducts(r.products)).catch(() => {});
   };
@@ -60,6 +96,23 @@ export default function Payments({ quote }: { quote: PriceQuote }) {
       setBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!invoice || invoice.isPaid) return;
+    const timer = setInterval(async () => {
+      try {
+        const res = await api.invoiceStatus(invoice.paymentHash);
+        if (res.isPaid) {
+          setInvoice({ ...invoice, isPaid: true });
+          clearInterval(timer);
+          refresh();
+        }
+      } catch {
+        /* keep polling */
+      }
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [invoice]);
 
   const onchainSend = async () => {
     const amount = Number(satsAmount);
@@ -196,29 +249,32 @@ export default function Payments({ quote }: { quote: PriceQuote }) {
         <div className="mb-10">
           <SectionTitle>Recent Activity</SectionTitle>
           <div className="flex flex-col gap-4">
-            {(lightning?.activity ?? []).map((tx, i) => {
-              const incoming = tx.direction === 'in';
+            {ledger.length === 0 && (
+              <p className="text-xs font-bold text-gray-400 uppercase">No activity yet</p>
+            )}
+            {ledger.map((tx) => {
+              const style = ledgerStyle(tx);
               return (
-                <div key={i} className="flex justify-between items-center bg-slate-50 p-4 rounded-3xl border border-slate-100">
+                <div key={tx.id} className="flex justify-between items-center bg-slate-50 p-4 rounded-3xl border border-slate-100">
                   <div className="flex items-center gap-3">
                     <div
-                      className={`w-10 h-10 ${incoming ? 'bg-green-100 text-green-500' : 'bg-red-100 text-red-500'} rounded-full flex items-center justify-center`}
+                      className={`w-10 h-10 ${style.bg} ${style.fg} rounded-full flex items-center justify-center`}
                     >
-                      <i className={`fa-solid ${incoming ? 'fa-arrow-down' : 'fa-arrow-up'}`} />
+                      <i className={`fa-solid ${style.icon}`} />
                     </div>
                     <div>
-                      <p className="font-bold text-sm text-black">{tx.memo || 'Lightning tx'}</p>
+                      <p className="font-bold text-sm text-black">{tx.memo}</p>
                       <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide">
-                        {new Date(tx.createdAt).toLocaleString()}
+                        {tx.source} · {new Date(tx.createdAt).toLocaleString()}
                       </p>
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className={`font-bold text-sm ${incoming ? 'text-green-500' : 'text-black'}`}>
-                      {incoming ? '+' : '-'}{sats(tx.amountSats)} sats
+                    <p className={`font-bold text-sm ${tx.direction === 'in' ? 'text-green-500' : 'text-black'}`}>
+                      {ledgerAmount(tx, quote.btcPriceMxn)}
                     </p>
                     <p className="text-[10px] text-gray-400 font-bold">
-                      {incoming ? '+' : '-'}{mxn((tx.amountSats / 100_000_000) * quote.btcPriceMxn, 2)}
+                      {ledgerFiat(tx, quote.btcPriceMxn)}
                     </p>
                   </div>
                 </div>
@@ -276,7 +332,9 @@ export default function Payments({ quote }: { quote: PriceQuote }) {
               <AmountInput prefix="⚡" value={satsAmount} onChange={setSatsAmount} placeholder="sats" />
               {invoice ? (
                 <div className="bg-slate-100 p-3 rounded-xl mb-6 mt-2">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Invoice</p>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
+                    Invoice {invoice.isPaid && <span className="text-green-500 ml-1">· Paid ✓</span>}
+                  </p>
                   <p className="text-[11px] font-bold text-black break-all">{invoice.invoice}</p>
                 </div>
               ) : (

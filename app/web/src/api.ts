@@ -60,6 +60,19 @@ export interface LightningData {
   btcPriceMxn: number;
 }
 
+export type LedgerSource = 'lightning' | 'exchange' | 'onchain' | 'market';
+
+export interface LedgerItem {
+  id: string;
+  source: LedgerSource;
+  direction: 'in' | 'out';
+  amountSats?: number;
+  amountBtc?: number;
+  amountFiat?: number;
+  memo: string;
+  createdAt: string;
+}
+
 export interface InflationData {
   annualRatePct: number;
   asOf: string;
@@ -108,13 +121,57 @@ export interface OnChainData {
   fiatValueMxn: number;
 }
 
+export type DcaFrequency = 'daily' | 'weekly' | 'monthly';
+
 export interface DcaSchedule {
   id: number;
   amount_fiat: number;
-  frequency: string;
+  frequency: DcaFrequency;
   enabled: number;
   last_run_at: string | null;
   created_at: string;
+}
+
+export interface TaxSummary {
+  buys: { count: number; btc: number; investedMxn: number };
+  sells: { count: number; btc: number; proceedsMxn: number };
+  avgCostMxn: number;
+  realizedGainMxn: number;
+  trades: { id: number; kind: 'buy' | 'sell'; amountBtc: number; amountFiat: number; priceMxn: number; createdAt: string }[];
+}
+
+export interface SecurityCheck {
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface SecurityReport {
+  checks: SecurityCheck[];
+  utxoCount: number;
+  utxoTotalSats: number;
+  unconfirmedSats: number;
+  confirmedSats: number;
+  minConfirmations: number;
+  largestUtxoSats: number;
+  address: string;
+  provider: string;
+}
+
+export interface DcaGrowthPoint {
+  t: string;
+  investedMxn: number;
+  valueMxn: number;
+}
+
+export interface DcaGrowth {
+  buys: number;
+  investedMxn: number;
+  stackedBtc: number;
+  valueMxn: number;
+  growthMxn: number;
+  growthPct: number;
+  points: DcaGrowthPoint[];
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -131,6 +188,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<{ ok: boolean }>('/health'),
+  ledger: () => request<{ items: LedgerItem[] }>('/ledger'),
   price: () => request<{ quote: PriceQuote; history: PricePoint[] }>('/price'),
   wallet: () => request<WalletData>('/wallet'),
   addFiat: (amountMxn: number) => request<{ ok: boolean }>('/wallet/add', { method: 'POST', body: JSON.stringify({ amountMxn }) }),
@@ -145,6 +203,7 @@ export const api = {
   lightning: () => request<LightningData>('/lightning'),
   createInvoice: (amountSats: number, memo: string) =>
     request<{ ok: boolean; invoice: LightningInvoice }>('/lightning/invoices', { method: 'POST', body: JSON.stringify({ amountSats, memo }) }),
+  invoiceStatus: (paymentHash: string) => request<{ ok: boolean; isPaid: boolean }>(`/lightning/invoices/${paymentHash}`),
   payInvoice: (bolt11: string, amountSats?: number) =>
     request<{ ok: boolean; preimage: string; feeSats: number }>('/lightning/pay', { method: 'POST', body: JSON.stringify({ bolt11, amountSats }) }),
   inflation: () => request<InflationData>('/inflation'),
@@ -155,6 +214,10 @@ export const api = {
     request<{ ok: boolean; order: MarketOrder }>('/market/purchase', { method: 'POST', body: JSON.stringify({ productId, amountFiat }) }),
   loanQuote: (collateralBtc: number) => request<{ ok: boolean; loan: LoanQuote; btcPriceMxn: number }>(`/loan/quote?collateralBtc=${collateralBtc}`),
   dca: () => request<{ schedules: DcaSchedule[] }>('/dca'),
-  createDca: (amountFiat: number) => request<{ schedules: DcaSchedule[] }>('/dca', { method: 'POST', body: JSON.stringify({ amountFiat }) }),
+  createDca: (amountFiat: number, frequency?: DcaFrequency) =>
+    request<{ schedules: DcaSchedule[] }>('/dca', { method: 'POST', body: JSON.stringify({ amountFiat, frequency }) }),
   deleteDca: (id: number) => request<{ ok: boolean }>(`/dca/${id}`, { method: 'DELETE' }),
+  dcaGrowth: () => request<{ growth: DcaGrowth; btcPriceMxn: number }>('/dca/growth'),
+  taxes: () => request<TaxSummary>('/taxes'),
+  security: () => request<SecurityReport>('/security'),
 };

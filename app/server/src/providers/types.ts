@@ -70,6 +70,10 @@ export interface LightningProvider {
   createInvoice(amountSats: number, memo: string): Promise<LightningInvoice>;
   payInvoice(bolt11: string, amountSats?: number): Promise<LightningPayment>;
   getActivity(): Promise<LightningActivity[]>;
+  /** Live invoice status (mock returns tracked state, LNBits polls). */
+  getInvoiceStatus?(paymentHash: string): Promise<boolean>;
+  /** Called by the webhook scaffold when LNBits reports a payment. */
+  markPaid?(paymentHash: string): Promise<void>;
 }
 
 export interface MarketProduct {

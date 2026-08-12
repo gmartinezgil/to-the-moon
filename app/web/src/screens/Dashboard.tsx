@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, type Balances, type PricePoint, type PriceQuote } from '../api';
+import { api, type Balances, type DcaGrowth, type PricePoint, type PriceQuote, type Transaction } from '../api';
 import { AmountInput, BigButton, Modal, Pill, SectionTitle } from '../components/ui';
 import { Sparkline } from '../components/Sparkline';
 import { btc, mxn } from '../format';
@@ -10,11 +10,13 @@ export default function Dashboard({
   quote,
   history,
   balances,
+  transactions,
   onChanged,
 }: {
   quote: PriceQuote;
   history: PricePoint[];
   balances: Balances;
+  transactions: Transaction[];
   onChanged: () => void;
 }) {
   const [modalType, setModalType] = useState<ModalType>(null);
@@ -23,6 +25,8 @@ export default function Dashboard({
   const [busy, setBusy] = useState(false);
   const [showReminder, setShowReminder] = useState(false);
   const [inflation, setInflation] = useState<{ annualRatePct: number; source: string } | null>(null);
+  const [deposit, setDeposit] = useState<{ clabe: string; institution: string } | null>(null);
+  const [growth, setGrowth] = useState<DcaGrowth | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setShowReminder(true), 30000);
@@ -32,6 +36,16 @@ export default function Dashboard({
   useEffect(() => {
     api.inflation().then(setInflation).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    api.dcaGrowth().then((r) => setGrowth(r.growth)).catch(() => {});
+  }, [balances]);
+
+  useEffect(() => {
+    if (modalType === 'add') {
+      api.deposit().then(setDeposit).catch(() => {});
+    }
+  }, [modalType]);
 
   const submit = async () => {
     const val = Number(amount);
@@ -55,6 +69,20 @@ export default function Dashboard({
   };
 
   const trendPct = history.length >= 2 ? ((history[history.length - 1].p - history[0].p) / history[0].p) * 100 : quote.change24hPct;
+
+  const growthPoints = growth?.points ?? [];
+  const maxVal = Math.max(...growthPoints.map((p) => Math.max(p.investedMxn, p.valueMxn)), 1);
+  const growthLine = (points: { investedMxn: number; valueMxn: number }[], key: 'investedMxn' | 'valueMxn', max: number) => {
+    if (points.length < 2) return '';
+    const step = 100 / (points.length - 1);
+    return points
+      .map((p, i) => {
+        const x = i * step;
+        const y = 40 - (p[key] / max) * 38;
+        return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(' ');
+  };
 
   return (
     <div className="animate-fadeInFast relative h-full">
@@ -138,11 +166,35 @@ export default function Dashboard({
 
         <div className="mb-8">
           <SectionTitle>DCA Growth</SectionTitle>
-          <div className="bg-slate-50 border border-slate-100 rounded-3xl p-5 relative overflow-hidden">
-            <Sparkline points={history.map((h) => h.p)} color="#FFDE3A" height={80} />
-            <div className="relative z-10">
-              <p className="text-2xl font-black text-black">{btc(balances.btc, 4)} BTC</p>
-              <p className="text-xs font-bold text-green-600">+ Active Stacking</p>
+          <div className="bg-slate-50 border border-slate-100 rounded-3xl p-5">
+            <div className="flex items-end justify-between mb-3">
+              <div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase">Current Value</p>
+                <p className="text-2xl font-black text-black">{growth ? mxn(growth.valueMxn) : '—'}</p>
+                <p className="text-[10px] font-bold text-slate-500 uppercase mt-1">
+                  {growth ? mxn(growth.investedMxn) : '—'} invested · {growth ? btc(growth.stackedBtc, 6) : '—'} BTC
+                </p>
+              </div>
+              {growth && (
+                <span className={`font-black text-sm ${growth.growthPct >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                  {growth.growthPct >= 0 ? '+' : ''}{growth.growthPct.toFixed(1)}%
+                </span>
+              )}
+            </div>
+            <div className="relative h-[90px] overflow-hidden">
+              <svg viewBox="0 0 100 40" preserveAspectRatio="none" className="absolute bottom-0 left-0 w-full h-full">
+                <path d="M0,40 L100,40" stroke="#e2e8f0" strokeWidth="1" strokeDasharray="2" />
+                <path d={growthLine(growthPoints, 'investedMxn', maxVal)} fill="none" stroke="#94a3b8" strokeWidth="2" />
+                <path d={growthLine(growthPoints, 'valueMxn', maxVal)} fill="none" stroke="#FFDE3A" strokeWidth="2.5" strokeLinecap="round" />
+              </svg>
+            </div>
+            <div className="flex gap-4 mt-2">
+              <span className="text-[9px] font-bold text-slate-400 uppercase flex items-center gap-1">
+                <span className="w-3 h-1 bg-slate-300 inline-block rounded" /> Invested
+              </span>
+              <span className="text-[9px] font-bold text-slate-400 uppercase flex items-center gap-1">
+                <span className="w-3 h-1 bg-[#FFDE3A] inline-block rounded" /> Market value
+              </span>
             </div>
           </div>
         </div>
@@ -213,8 +265,10 @@ export default function Dashboard({
           {modalType === 'add' && (
             <div className="bg-slate-50 p-4 rounded-2xl mt-4 mb-4 text-center border border-slate-200">
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Transfer via SPEI</p>
-              <p className="text-lg font-black text-black tracking-widest mb-1">646 180 1234567890 1</p>
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Institution: Aureo Bitcoin</p>
+              <p className="text-lg font-black text-black tracking-widest mb-1">{deposit?.clabe ?? '—'}</p>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                Institution: {deposit?.institution ?? '...'}
+              </p>
             </div>
           )}
           {modalType !== 'add' && (

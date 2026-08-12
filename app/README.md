@@ -44,11 +44,16 @@ address from a locally generated mnemonic, syncs balance/UTXOs, and signs/sweeps
 - `GET /api/price` — live quote + 30-day history
 - `GET /api/wallet`, `POST /api/wallet/add|buy|sell`, `GET /api/wallet/deposit`
 - `GET /api/wallet/onchain`, `POST /api/onchain/simulate-deposit`, `POST /api/onchain/send`
-- `GET /api/lightning`, `POST /api/lightning/invoices`, `POST /api/lightning/pay`
+- `GET /api/ledger` — unified activity (Lightning + exchange + on-chain + marketplace)
+- `GET /api/lightning`, `POST /api/lightning/invoices`, `GET /api/lightning/invoices/:paymentHash`,
+  `POST /api/lightning/pay`, `POST /api/lightning/webhook`
 - `GET /api/inflation`
 - `POST /api/retirement/estimate`
 - `GET /api/market/products`, `POST /api/market/purchase`
 - `GET /api/loan/quote`
-- `GET /api/dca`, `POST /api/dca`, `DELETE /api/dca/:id`
+- `GET /api/dca`, `POST /api/dca` (accepts optional `frequency`: `daily`|`weekly`|`monthly`),
+  `DELETE /api/dca/:id`, `GET /api/dca/growth` (cost basis vs. market value)
+- `GET /api/taxes` — realized capital gains from trade history
+- `GET /api/security` — on-chain UTXO audit + system health
 
 See `docs/implementation-plan.md` in the repo root for the full feature map.

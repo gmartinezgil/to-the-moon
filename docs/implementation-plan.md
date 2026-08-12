@@ -83,7 +83,7 @@ with a live integration.
 ## Delivery phases
 
 > Status is tracked against the live implementation in `app/` (monorepo: Fastify + TypeScript
-> API, SQLite via `node:sqlite`, Vite + React + Tailwind web). Phase 0 and 1 are built.
+> API, SQLite via `node:sqlite`, Vite + React + Tailwind web). Phases 0–5 are built.
 
 1. **Phase 0 — DONE** — monorepo skeleton (`app/server`, `app/web`), SQLite schema, live price
    feed (Bitso → CoinGecko → mock fallback), all provider interfaces + mocks, full API surface,
@@ -92,10 +92,22 @@ with a live integration.
    SQLite), deposit address + QR in Payments, UTXO/balance sync via Mempool.space
    (`ONCHAIN_PROVIDER=mempool`) or mock (simulated deposits), PSBT-signed sends with fee
    estimation and change
-3. **Phase 2** — Bitso buy/sell + SPEI deposit + DCA cron
-4. **Phase 3** — Lightning node, send/receive, activity ledger
-5. **Phase 4** — Bitrefill + Ledn integrations
-6. **Phase 5** — Retirement engine + inflation shield on real data, directory tools
+3. **Phase 2 — DONE** — Bitso buy/sell (private adapter fixed: trailing-slash endpoints,
+   HMAC signature over the full `/v3/` path, error body parsing; activates with
+   `BITSO_API_KEY` + `BITSO_API_SECRET`), SPEI deposit instructions fetched by the Add Funds
+   modal, DCA cron with `daily`/`weekly`/`monthly` frequencies and real buy history feeding
+   the DCA Growth card
+4. **Phase 3 — DONE** — Lightning send/receive (LNBits live adapter), invoice status polling
+   (`GET /api/lightning/invoices/:paymentHash`) + webhook scaffold (`POST /api/lightning/webhook`),
+   and a **unified activity ledger** (`GET /api/ledger`) powering Recent Activity across
+   Lightning, exchange trades, on-chain and Bitrefill
+5. **Phase 4 — DONE** — Bitrefill marketplace (mock + live adapter), Ledn LTV calculator
+   (execution pending partner/DeFi as no self-serve API exists)
+6. **Phase 5 — DONE** — Retirement engine + Inflation Shield on real data; directory tools:
+   **Taxes** (`GET /api/taxes`, realized capital gains from trade history) and **Security**
+   (`GET /api/security`, on-chain UTXO audit + system health) now live; DCA Growth shows cost
+   basis vs. market value from real buy history. Remaining: push notifications, camera QR
+   scan, partner integrations (SPEI funding, Ledn execution, savings APY).
 
 ## Security
 
