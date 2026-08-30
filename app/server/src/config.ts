@@ -12,4 +12,6 @@ export const config = {
   bitrefillApiKey: process.env.BITREFILL_API_KEY ?? '',
   dcaIntervalMs: Number(process.env.DCA_INTERVAL_MS ?? 30000),
   mockSeedPrice: Number(process.env.MOCK_SEED_PRICE ?? 1325400),
+  // Comma-separated allowed CORS origins, e.g. "http://localhost:5173". Empty → same-origin.
+  corsOrigins: (process.env.CORS_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
 } as const;

@@ -8,6 +8,20 @@ import { getDcaGrowth } from './services/dcaGrowth';
 import { estimateRetirement } from './services/retirement';
 import { listSchedules, createSchedule, deleteSchedule, isDcaFrequency } from './services/dca';
 import { syncOnchain, simulateDeposit, sendOnchain } from './services/onchain';
+import { hashPassword, verifyPassword, getSessionUser, createUserToken, logout } from './auth';
+import { auditLog, idempotent, type AuditActor } from './audit';
+import { getVapidKeys, saveSubscription, type PushSubscription, sendPush } from './push';
+
+type AuthedRequest = FastifyRequest & { user?: { id: number; email: string } };
+
+function actorFor(req: FastifyRequest): AuditActor {
+  const authed = req as AuthedRequest;
+  return {
+    user: authed.user ? { id: authed.user.id } : null,
+    ip: req.ip,
+    ua: req.headers['user-agent'],
+  };
+}
 
 function num(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -40,7 +54,88 @@ export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
     }
   };
 
+  const PUBLIC_PATHS = new Set([
+    '/api/health',
+    '/api/auth/register',
+    '/api/auth/login',
+    '/api/push/vapid',
+  ]);
+  app.addHook('preHandler', async (req: FastifyRequest, reply: FastifyReply) => {
+    const publicRoute = PUBLIC_PATHS.has(req.url.split('?')[0]) || req.url.startsWith('/api/lightning/webhook');
+    if (publicRoute) return;
+    const user = getSessionUser(ctx.db, req.headers.authorization);
+    if (!user) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+    (req as FastifyRequest & { user?: typeof user }).user = user;
+  });
+
   app.get('/api/health', () => ({ ok: true, time: new Date().toISOString() }));
+
+  // Authentication
+  app.post('/api/auth/register', async (req: FastifyRequest, reply: FastifyReply) => {
+    const body = asBody(req);
+    const email = String(body.email ?? '').trim().toLowerCase();
+    const password = String(body.password ?? '');
+    const displayName = String(body.displayName ?? '').trim();
+    if (!email || !password) return fail(reply, new Error('email and password are required'));
+    if (password.length < 8) return fail(reply, new Error('password must be at least 8 characters'));
+    try {
+      const info = ctx.db.prepare('INSERT INTO users (email, password_hash, display_name, created_at) VALUES (?, ?, ?, ?)')
+        .run(email, hashPassword(password), displayName, new Date().toISOString());
+      const token = createUserToken(ctx.db, Number(info.lastInsertRowid));
+      return { token, user: { email, displayName } };
+    } catch {
+      return fail(reply, new Error('email is already registered'));
+    }
+  });
+
+  app.post('/api/auth/login', async (req: FastifyRequest, reply: FastifyReply) => {
+    const body = asBody(req);
+    const email = String(body.email ?? '').trim().toLowerCase();
+    const password = String(body.password ?? '');
+    const user = ctx.db.prepare('SELECT * FROM users WHERE email = ?').get(email) as
+      | { id: number; email: string; password_hash: string; display_name: string }
+      | undefined;
+    if (!user || !verifyPassword(password, user.password_hash)) {
+      return fail(reply, new Error('invalid email or password'));
+    }
+    const token = createUserToken(ctx.db, user.id);
+    return { token, user: { email: user.email, displayName: user.display_name } };
+  });
+
+  app.post('/api/auth/logout', async (req: FastifyRequest, reply: FastifyReply) => {
+    logout(ctx.db, req.headers.authorization);
+    return { ok: true };
+  });
+
+  app.get('/api/auth/me', async (req: FastifyRequest & { user?: unknown }, reply: FastifyReply) => {
+    if (!req.user) return reply.code(401).send({ error: 'Unauthorized' });
+    return { user: req.user };
+  });
+
+  // Push notifications
+  app.get('/api/push/vapid', async () => {
+    return { publicKey: getVapidKeys().publicKey };
+  });
+
+  app.post('/api/push/subscribe', async (req: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const body = asBody(req);
+      const sub = body.subscription as PushSubscription | undefined;
+      if (!sub || typeof sub.endpoint !== 'string' || !sub.keys?.p256dh || !sub.keys?.auth) {
+        return fail(reply, new Error('A valid push subscription is required'));
+      }
+      const userId = (req as AuthedRequest).user?.id;
+      if (userId == null) return reply.code(401).send({ error: 'Unauthorized' });
+      saveSubscription(ctx.db, userId, sub);
+      return { ok: true };
+    } catch (err) {
+      fail(reply, err as Error);
+      return undefined;
+    }
+  });
 
   // Unified activity ledger
   app.get('/api/ledger', handle(async () => {
@@ -62,7 +157,15 @@ export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post('/api/wallet/add', async (req: FastifyRequest, reply: FastifyReply) => {
     try {
       const amountMxn = reqNum(req, 'amountMxn');
-      addFiat(ctx, amountMxn);
+      await idempotent(ctx.db, {
+        key: req.headers['idempotency-key'] as string | undefined,
+        method: 'POST', path: '/api/wallet/add', userId: (req as AuthedRequest).user?.id ?? null,
+        run: () => {
+          addFiat(ctx, amountMxn);
+          auditLog(ctx.db, actorFor(req), 'wallet.add_fiat', { amountMxn });
+          return { ok: true };
+        },
+      });
       return { ok: true };
     } catch (err) {
       fail(reply, err as Error);
@@ -73,8 +176,19 @@ export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post('/api/wallet/buy', async (req: FastifyRequest, reply: FastifyReply) => {
     try {
       const amountMxn = reqNum(req, 'amountMxn');
-      const result = await buyBtc(ctx, amountMxn);
-      return { ok: true, ...result };
+      const result = await idempotent(ctx.db, {
+        key: req.headers['idempotency-key'] as string | undefined,
+        method: 'POST', path: '/api/wallet/buy', userId: (req as AuthedRequest).user?.id ?? null,
+        run: async () => {
+          const r = await buyBtc(ctx, amountMxn);
+          auditLog(ctx.db, actorFor(req), 'wallet.buy', { amountMxn, btc: r.btc, price: r.price });
+          return { ok: true, ...r };
+        },
+      });
+      if (result && 'replay' in result) {
+        return reply.code(200).send(result.value ?? { ok: true });
+      }
+      return result;
     } catch (err) {
       fail(reply, err as Error);
       return undefined;
@@ -84,8 +198,19 @@ export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post('/api/wallet/sell', async (req: FastifyRequest, reply: FastifyReply) => {
     try {
       const amountBtc = reqNum(req, 'amountBtc');
-      const result = await sellBtc(ctx, amountBtc);
-      return { ok: true, ...result };
+      const result = await idempotent(ctx.db, {
+        key: req.headers['idempotency-key'] as string | undefined,
+        method: 'POST', path: '/api/wallet/sell', userId: (req as AuthedRequest).user?.id ?? null,
+        run: async () => {
+          const r = await sellBtc(ctx, amountBtc);
+          auditLog(ctx.db, actorFor(req), 'wallet.sell', { amountBtc, fiat: r.fiat, price: r.price });
+          return { ok: true, ...r };
+        },
+      });
+      if (result && 'replay' in result) {
+        return reply.code(200).send(result.value ?? { ok: true });
+      }
+      return result;
     } catch (err) {
       fail(reply, err as Error);
       return undefined;
@@ -118,8 +243,19 @@ export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
       const body = asBody(req);
       if (typeof body.to !== 'string') throw new Error('to address required');
       const amountSats = reqNum(req, 'amountSats');
-      const result = await sendOnchain(ctx, body.to, amountSats);
-      return { ok: true, ...result };
+      const result = await idempotent(ctx.db, {
+        key: req.headers['idempotency-key'] as string | undefined,
+        method: 'POST', path: '/api/onchain/send', userId: (req as AuthedRequest).user?.id ?? null,
+        run: async () => {
+          const r = await sendOnchain(ctx, body.to as string, amountSats);
+          auditLog(ctx.db, actorFor(req), 'onchain.send', { to: body.to, amountSats, txid: r.txid, feeSats: r.feeSats });
+          return { ok: true, ...r };
+        },
+      });
+      if (result && 'replay' in result) {
+        return reply.code(200).send(result.value ?? { ok: true });
+      }
+      return result;
     } catch (err) {
       fail(reply, err as Error);
       return undefined;
@@ -147,6 +283,7 @@ export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
       const body = asBody(req);
       const memo = typeof body.memo === 'string' ? body.memo : '';
       const invoice = await ctx.lightning.createInvoice(amountSats, memo);
+      auditLog(ctx.db, actorFor(req), 'lightning.invoice_created', { amountSats, memo, paymentHash: invoice.paymentHash });
       return { ok: true, invoice };
     } catch (err) {
       fail(reply, err as Error);
@@ -161,8 +298,19 @@ export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
         throw new Error('A valid bolt11 invoice is required');
       }
       const amountSats = num(body.amountSats);
-      const payment = await ctx.lightning.payInvoice(body.bolt11, amountSats);
-      return { ok: true, ...payment };
+      const result = await idempotent(ctx.db, {
+        key: req.headers['idempotency-key'] as string | undefined,
+        method: 'POST', path: '/api/lightning/pay', userId: (req as AuthedRequest).user?.id ?? null,
+        run: async () => {
+          const payment = await ctx.lightning.payInvoice(body.bolt11 as string, amountSats);
+          auditLog(ctx.db, actorFor(req), 'lightning.pay', { bolt11: body.bolt11, amountSats, preimage: payment.preimage, feeSats: payment.feeSats });
+          return { ok: true, ...payment };
+        },
+      });
+      if (result && 'replay' in result) {
+        return reply.code(200).send(result.value ?? { ok: true });
+      }
+      return result;
     } catch (err) {
       fail(reply, err as Error);
       return undefined;
@@ -193,7 +341,10 @@ export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
         (typeof nested.payment_hash === 'string' ? nested.payment_hash : '') ||
         (typeof fromQuery === 'string' ? fromQuery : '');
       if (!paymentHash) throw new Error('payment_hash required in webhook body');
-      if (ctx.lightning.markPaid) await ctx.lightning.markPaid(paymentHash);
+      if (ctx.lightning.markPaid) {
+        await ctx.lightning.markPaid(paymentHash);
+        sendPush(ctx.db, 'Lightning payment received', 'Your sats just arrived.');
+      }
       return { ok: true, received: true };
     } catch (err) {
       fail(reply, err as Error);
@@ -271,7 +422,9 @@ export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
       if (body.frequency !== undefined && !isDcaFrequency(body.frequency)) {
         throw new Error('frequency must be daily, weekly or monthly');
       }
-      return { schedules: createSchedule(ctx, amountFiat, body.frequency) };
+      const schedules = createSchedule(ctx, amountFiat, body.frequency);
+      auditLog(ctx.db, actorFor(req), 'dca.create', { amountFiat, frequency: body.frequency });
+      return { schedules };
     } catch (err) {
       fail(reply, err as Error);
       return undefined;
@@ -283,6 +436,7 @@ export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
       const id = Number((req.params as { id?: string }).id);
       if (!Number.isFinite(id)) throw new Error('Invalid id');
       deleteSchedule(ctx, id);
+      auditLog(ctx.db, actorFor(req), 'dca.delete', { id });
       return { ok: true };
     } catch (err) {
       fail(reply, err as Error);

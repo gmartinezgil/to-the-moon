@@ -7,11 +7,23 @@ let db: DatabaseSync | null = null;
 
 export function getDb(): DatabaseSync {
   if (db) return db;
-  mkdirSync(dirname(config.dbPath), { recursive: true });
-  db = new DatabaseSync(config.dbPath);
-  db.exec('PRAGMA journal_mode = WAL;');
-  migrate(db);
+  db = openDb(config.dbPath);
   return db;
+}
+
+export function openDb(path: string): DatabaseSync {
+  if (path !== ':memory:') {
+    mkdirSync(dirname(path), { recursive: true });
+  }
+  const instance = new DatabaseSync(path);
+  if (path !== ':memory:') instance.exec('PRAGMA journal_mode = WAL;');
+  migrate(instance);
+  return instance;
+}
+
+/** Test-only: drop the cached singleton so a fresh DB is created on next getDb(). */
+export function resetDb() {
+  db = null;
 }
 
 function migrate(db: DatabaseSync) {
@@ -64,7 +76,54 @@ function migrate(db: DatabaseSync) {
       balance_sats INTEGER NOT NULL DEFAULT 0,
       last_sync_at TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      display_name TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      token_hash TEXT NOT NULL UNIQUE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      action TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '{}',
+      ip TEXT,
+      user_agent TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS idempotency_keys (
+      token_hash TEXT PRIMARY KEY,
+      response TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      endpoint TEXT NOT NULL,
+      p256dh TEXT NOT NULL DEFAULT '',
+      auth TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
   `);
+  // Migration for DBs created before idempotency_keys gained a `response` column.
+  try {
+    db.exec("ALTER TABLE idempotency_keys ADD COLUMN response TEXT NOT NULL DEFAULT '{}'");
+  } catch {
+    // Column already exists.
+  }
   seed(db);
 }
 

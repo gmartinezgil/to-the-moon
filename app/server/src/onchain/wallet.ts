@@ -4,6 +4,7 @@ import { wordlist } from '@scure/bip39/wordlists/english.js';
 import * as bitcoin from 'bitcoinjs-lib';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import type { DatabaseSync } from 'node:sqlite';
+import { encryptSecret, decryptSecret, isEncrypted } from '../crypto';
 
 export interface AddressInfo {
   address: string;
@@ -31,9 +32,15 @@ export class HdWallet {
     const row = this.db.prepare('SELECT mnemonic FROM wallet_keys WHERE id = 1').get() as
       | { mnemonic: string }
       | undefined;
-    if (row) return row.mnemonic;
+    if (row) {
+      // Migrate a legacy plaintext mnemonic to encrypted form on read.
+      if (isEncrypted(row.mnemonic)) return decryptSecret(row.mnemonic);
+      const encrypted = encryptSecret(row.mnemonic);
+      this.db.prepare('UPDATE wallet_keys SET mnemonic = ? WHERE id = 1').run(encrypted);
+      return row.mnemonic;
+    }
     const mnemonic = bip39.generateMnemonic(wordlist, 128);
-    this.db.prepare('INSERT INTO wallet_keys (id, mnemonic) VALUES (1, ?)').run(mnemonic);
+    this.db.prepare('INSERT INTO wallet_keys (id, mnemonic) VALUES (1, ?)').run(encryptSecret(mnemonic));
     return mnemonic;
   }
 

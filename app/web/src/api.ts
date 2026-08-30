@@ -175,10 +175,11 @@ export interface DcaGrowth {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...init,
-  });
+  const headers = new Headers(init?.headers);
+  headers.set('Content-Type', 'application/json');
+  const token = getToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const res = await fetch(`/api${path}`, { ...init, headers });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error((data as { error?: string }).error ?? `Request failed (${res.status})`);
@@ -186,7 +187,31 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
+const TOKEN_KEY = 'ttm_token';
+
+export function getToken(): string | null {
+  return typeof localStorage === 'undefined' ? null : localStorage.getItem(TOKEN_KEY);
+}export function setToken(token: string | null) {
+  if (typeof localStorage === 'undefined') return;
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+export interface AuthUser {
+  email: string;
+  displayName: string;
+}
+
 export const api = {
+  register: (email: string, password: string, displayName?: string) =>
+    request<{ token: string; user: AuthUser }>('/auth/register', { method: 'POST', body: JSON.stringify({ email, password, displayName }) }),
+  login: (email: string, password: string) =>
+    request<{ token: string; user: AuthUser }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  logout: () => request<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
+  me: () => request<{ user: AuthUser }>('/auth/me'),
+  pushVapid: () => request<{ publicKey: string }>('/push/vapid'),
+  pushSubscribe: (subscription: unknown) =>
+    request<{ ok: boolean }>('/push/subscribe', { method: 'POST', body: JSON.stringify({ subscription }) }),
   health: () => request<{ ok: boolean }>('/health'),
   ledger: () => request<{ items: LedgerItem[] }>('/ledger'),
   price: () => request<{ quote: PriceQuote; history: PricePoint[] }>('/price'),
@@ -221,3 +246,38 @@ export const api = {
   taxes: () => request<TaxSummary>('/taxes'),
   security: () => request<SecurityReport>('/security'),
 };
+
+function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
+  const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+  const base64_ = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64_);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+
+/**
+ * Requests notification permission and registers the PushManager subscription
+ * with the server so it can deliver push notifications. Best-effort.
+ */
+export async function subscribeToPush(): Promise<void> {
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+    return;
+  }
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const { publicKey } = await request<{ publicKey: string }>('/push/vapid');
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+    }
+    if (subscription) {
+      await api.pushSubscribe(JSON.parse(JSON.stringify(subscription)));
+    }
+  } catch {
+    // Permission denied or push unavailable — ignore silently.
+  }
+}

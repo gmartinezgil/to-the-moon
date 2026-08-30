@@ -19,6 +19,17 @@ npm run dev
 - API: http://localhost:3001/api
 - Web: http://localhost:5173 (proxies `/api` to the server)
 
+## Tests
+
+```bash
+npm run test       # server unit + integration tests (vitest)
+npm run typecheck  # both workspaces
+npm run build      # production web build (includes PWA service worker)
+```
+
+The test suite runs against mock providers and an in-memory SQLite DB, so it is fully
+hermetic and needs no credentials or network. See `server/test/`.
+
 ## Provider model
 
 Every external integration sits behind a provider interface in `server/src/providers/` with
@@ -41,6 +52,12 @@ address from a locally generated mnemonic, syncs balance/UTXOs, and signs/sweeps
 
 ## API surface
 
+All endpoints below are **authenticated** via `Authorization: Bearer <token>` (except health,
+auth register/login, the public VAPID key, and the lightning webhook).
+
+- `GET /api/health`
+- `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`
+- `GET /api/push/vapid` (public), `POST /api/push/subscribe`
 - `GET /api/price` — live quote + 30-day history
 - `GET /api/wallet`, `POST /api/wallet/add|buy|sell`, `GET /api/wallet/deposit`
 - `GET /api/wallet/onchain`, `POST /api/onchain/simulate-deposit`, `POST /api/onchain/send`
@@ -56,4 +73,32 @@ address from a locally generated mnemonic, syncs balance/UTXOs, and signs/sweeps
 - `GET /api/taxes` — realized capital gains from trade history
 - `GET /api/security` — on-chain UTXO audit + system health
 
+Mutating routes (`wallet/add|buy|sell`, `onchain/send`, `lightning/pay`) accept an optional
+`Idempotency-Key` header; replaying the same key+method+path+user returns the cached response so
+double-spends never happen on network retries. Money actions are also recorded to an audit log
+(`audit_log`).
+
 See `docs/implementation-plan.md` in the repo root for the full feature map.
+
+## Security
+
+- **Authentication**: scrypt password hashing (per-user salt) + random bearer session tokens
+  (stored hashed, 7-day expiry).
+- **Encryption at rest**: the HD-wallet mnemonic is stored AES-256-GCM encrypted. The key comes
+  from `WALLET_KEY` if set, else a `server/data/server.key` file generated on first boot. Legacy
+  plaintext mnemonics migrate automatically.
+- **Transport hardening**: `@fastify/helmet` (X-Frame-Options, nosniff, etc.), `@fastify/rate-limit`
+  (300 req/min, drop idle sessions), `@fastify/cors` (locked down via `CORS_ORIGINS`), and a 1 MiB
+  body cap.
+- Production should run HTTPS (required for browser push) and set `WALLET_KEY`, `VAPID_PUBLIC_KEY`,
+  `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`.
+
+## PWA & Push
+
+The web app is a PWA: `vite-plugin-pwa` injects a manifest (`manifest.webmanifest`), an offline
+service worker (precaches assets + SPA navigation fallback), and icons (`public/icon-*.png`). The
+store will show "Add to Home Screen".
+
+Push notifications report DCA executions and received Lightning payments. The server generates
+VAPID keys on first boot (`server/data/vapid.json`) unless env vars are set. Push requires a secure
+context (HTTPS or `localhost`).

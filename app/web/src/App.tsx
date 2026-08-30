@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, type Balances, type PricePoint, type PriceQuote, type Transaction } from './api';
+import { api, getToken, subscribeToPush, type Balances, type PricePoint, type PriceQuote, type Transaction } from './api';
 import Dashboard from './screens/Dashboard';
 import Retirement from './screens/Retirement';
 import Payments from './screens/Payments';
 import Directory from './screens/Directory';
+import Login from './screens/Login';
 import { mxn } from './format';
 
 type View = 'home' | 'retirement' | 'payments' | 'directory';
@@ -16,12 +17,27 @@ const NAV: { id: View; icon: string }[] = [
 ];
 
 export default function App() {
+  const [authed, setAuthed] = useState<boolean | null>(null);
   const [view, setView] = useState<View>('home');
   const [quote, setQuote] = useState<PriceQuote | null>(null);
   const [history, setHistory] = useState<PricePoint[]>([]);
   const [balances, setBalances] = useState<Balances | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [apiError, setApiError] = useState<string | null>(null);
+
+  // Establish auth on first load: if a stored token is valid, enter the app.
+  useEffect(() => {
+    if (!getToken()) {
+      setAuthed(false);
+      return;
+    }
+    api
+      .me()
+      .then(() => setAuthed(true))
+      .catch(() => {
+        setAuthed(false);
+      });
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -37,10 +53,25 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (authed !== true) return;
     refresh();
     const timer = setInterval(refresh, 30000);
+    if ('Notification' in window && Notification.permission === 'default') {
+      // Offer push notifications once, silently if declined.
+      Notification.requestPermission().then((p) => {
+        if (p === 'granted') subscribeToPush();
+      });
+    }
     return () => clearInterval(timer);
-  }, [refresh]);
+  }, [authed, refresh]);
+
+  if (authed === null) {
+    return <div className="min-h-screen bg-[#0f172a]" />;
+  }
+
+  if (authed === false) {
+    return <Login onAuthed={() => setAuthed(true)} />;
+  }
 
   if (apiError) {
     return (

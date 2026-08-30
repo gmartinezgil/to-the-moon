@@ -1,13 +1,33 @@
 import Fastify from 'fastify';
+import helmet from '@fastify/helmet';
+import cors from '@fastify/cors';
+import rateLimit from '@fastify/rate-limit';
 import { config } from './config';
 import { createContext } from './context';
 import { registerRoutes } from './routes';
 import { runDue } from './services/dca';
 import { syncOnchain } from './services/onchain';
+import { sendPush } from './push';
 
 async function main() {
   const ctx = createContext();
-  const app = Fastify({ logger: true });
+  const app = Fastify({ logger: true, bodyLimit: 1024 * 1024 }); // 1 MiB request body cap
+
+  await app.register(helmet, {
+    contentSecurityPolicy: false, // Vite dev + inline styles from the UI
+    crossOriginEmbedderPolicy: false,
+  });
+  // CORS: only allow the configured frontend origin(s). Empty = same-origin only.
+  await app.register(cors, {
+    origin: config.corsOrigins.length ? config.corsOrigins : false,
+    credentials: false,
+  });
+  // Throttle API abuse; the global limit covers auth brute-force too.
+  await app.register(rateLimit, {
+    global: true,
+    max: 300,
+    timeWindow: '1 minute',
+  });
 
   registerRoutes(app, ctx);
 
@@ -28,7 +48,10 @@ async function main() {
   setInterval(() => {
     runDue(ctx)
       .then((results) => {
-        if (results.length) console.log('[dca] ran:', results);
+        if (results.length) {
+          console.log('[dca] ran:', results);
+          sendPush(ctx.db, 'DCA executed', `${results.filter((r) => r.status === 'ok').length} scheduled buy(s) completed.`);
+        }
       })
       .catch((err) => console.error('[dca] error:', err));
   }, config.dcaIntervalMs);

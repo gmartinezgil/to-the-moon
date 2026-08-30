@@ -83,7 +83,7 @@ with a live integration.
 ## Delivery phases
 
 > Status is tracked against the live implementation in `app/` (monorepo: Fastify + TypeScript
-> API, SQLite via `node:sqlite`, Vite + React + Tailwind web). Phases 0–5 are built.
+> API, SQLite via `node:sqlite`, Vite + React + Tailwind web). Phases 0–6 are built.
 
 1. **Phase 0 — DONE** — monorepo skeleton (`app/server`, `app/web`), SQLite schema, live price
    feed (Bitso → CoinGecko → mock fallback), all provider interfaces + mocks, full API surface,
@@ -103,11 +103,17 @@ with a live integration.
    Lightning, exchange trades, on-chain and Bitrefill
 5. **Phase 4 — DONE** — Bitrefill marketplace (mock + live adapter), Ledn LTV calculator
    (execution pending partner/DeFi as no self-serve API exists)
-6. **Phase 5 — DONE** — Retirement engine + Inflation Shield on real data; directory tools:
+ 6. **Phase 5 — DONE** — Retirement engine + Inflation Shield on real data; directory tools:
    **Taxes** (`GET /api/taxes`, realized capital gains from trade history) and **Security**
    (`GET /api/security`, on-chain UTXO audit + system health) now live; DCA Growth shows cost
-   basis vs. market value from real buy history. Remaining: push notifications, camera QR
+   basis vs. market value from real buy history. Remaining: camera QR
    scan, partner integrations (SPEI funding, Ledn execution, savings APY).
+7. **Phase 6 — DONE (production hardening)** — full test suite (Vitest unit + integration against
+   mock providers), authenticated session layer (register/login/logout/me), and web login gate;
+   transport hardening (Helmet, rate-limit, CORS, body cap); mnemonic **encryption at rest**
+   (AES-256-GCM); **audit logging** + **idempotency keys** on money routes; **PWA** (manifest,
+   offline service worker, icons); **push notifications** (VAPID, subscription API, DCA + invoice
+   events via Web Push).
 
 ## Security
 
