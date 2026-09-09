@@ -117,6 +117,23 @@ function migrate(db: DatabaseSync) {
       auth TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS password_resets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      used_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS login_failures (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL,
+      ip TEXT NOT NULL,
+      count INTEGER NOT NULL DEFAULT 0,
+      window_start TEXT NOT NULL,
+      locked_until TEXT
+    );
   `);
   // Migration for DBs created before idempotency_keys gained a `response` column.
   try {

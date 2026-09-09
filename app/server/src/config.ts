@@ -14,4 +14,15 @@ export const config = {
   mockSeedPrice: Number(process.env.MOCK_SEED_PRICE ?? 1325400),
   // Comma-separated allowed CORS origins, e.g. "http://localhost:5173". Empty → same-origin.
   corsOrigins: (process.env.CORS_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+  // Auth tuning.
+  cookieSecure: process.env.COOKIE_SECURE === '1',
+  authMinPasswordLength: Number(process.env.AUTH_MIN_PASSWORD_LENGTH ?? 10),
+  authMaxLoginAttempts: Number(process.env.AUTH_MAX_LOGIN_ATTEMPTS ?? 5),
+  authLockoutMs: Number(process.env.AUTH_LOCKOUT_MS ?? 15 * 60 * 1000),
+  authFailureWindowMs: Number(process.env.AUTH_FAILURE_WINDOW_MS ?? 15 * 60 * 1000),
+  authSessionTtlMs: Number(process.env.AUTH_SESSION_TTL_MS ?? 7 * 24 * 60 * 60 * 1000),
+  authMaxSessionsPerUser: Number(process.env.AUTH_MAX_SESSIONS_PER_USER ?? 10),
+  // When true (default), the forgot-password response includes the reset token so the
+  // reset flow works before an email provider is wired. Set to '0' in production.
+  authExposeResetToken: process.env.AUTH_EXPOSE_RESET_TOKEN !== '0',
 } as const;

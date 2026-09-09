@@ -177,9 +177,11 @@ export interface DcaGrowth {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set('Content-Type', 'application/json');
-  const token = getToken();
-  if (token) headers.set('Authorization', `Bearer ${token}`);
-  const res = await fetch(`/api${path}`, { ...init, headers });
+  const res = await fetch(`/api${path}`, {
+    credentials: 'same-origin', // session rides on the HttpOnly cookie
+    ...init,
+    headers,
+  });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error((data as { error?: string }).error ?? `Request failed (${res.status})`);
@@ -187,27 +189,38 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
-const TOKEN_KEY = 'ttm_token';
-
-export function getToken(): string | null {
-  return typeof localStorage === 'undefined' ? null : localStorage.getItem(TOKEN_KEY);
-}export function setToken(token: string | null) {
-  if (typeof localStorage === 'undefined') return;
-  if (token) localStorage.setItem(TOKEN_KEY, token);
-  else localStorage.removeItem(TOKEN_KEY);
-}
-
 export interface AuthUser {
   email: string;
   displayName: string;
 }
 
+export interface PasswordPolicy {
+  minLength: number;
+  requireLowercase: boolean;
+  requireUppercase: boolean;
+  requireNumber: boolean;
+  requireSymbol: boolean;
+}
+
+export const AUTH_POLICY: PasswordPolicy = {
+  minLength: 10,
+  requireLowercase: true,
+  requireUppercase: true,
+  requireNumber: true,
+  requireSymbol: true,
+};
+
 export const api = {
   register: (email: string, password: string, displayName?: string) =>
-    request<{ token: string; user: AuthUser }>('/auth/register', { method: 'POST', body: JSON.stringify({ email, password, displayName }) }),
+    request<{ user: AuthUser }>('/auth/register', { method: 'POST', body: JSON.stringify({ email, password, displayName }) }),
   login: (email: string, password: string) =>
-    request<{ token: string; user: AuthUser }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+    request<{ user: AuthUser }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  forgot: (email: string) =>
+    request<{ ok: boolean; resetToken?: string }>('/auth/forgot', { method: 'POST', body: JSON.stringify({ email }) }),
+  reset: (token: string, password: string) =>
+    request<{ ok: boolean }>('/auth/reset', { method: 'POST', body: JSON.stringify({ token, password }) }),
   logout: () => request<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
+  logoutAll: () => request<{ ok: boolean }>('/auth/logout-all', { method: 'POST' }),
   me: () => request<{ user: AuthUser }>('/auth/me'),
   pushVapid: () => request<{ publicKey: string }>('/push/vapid'),
   pushSubscribe: (subscription: unknown) =>

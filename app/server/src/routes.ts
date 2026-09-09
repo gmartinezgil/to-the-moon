@@ -1,3 +1,4 @@
+import cookie from '@fastify/cookie';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { AppContext } from './context';
 import { getBalances, getTransactions, addFiat, buyBtc, sellBtc, getDepositInstructions } from './services/wallet';
@@ -8,11 +9,28 @@ import { getDcaGrowth } from './services/dcaGrowth';
 import { estimateRetirement } from './services/retirement';
 import { listSchedules, createSchedule, deleteSchedule, isDcaFrequency } from './services/dca';
 import { syncOnchain, simulateDeposit, sendOnchain } from './services/onchain';
-import { hashPassword, verifyPassword, getSessionUser, createUserToken, logout } from './auth';
+import {
+  SESSION_COOKIE,
+  getUserFromRequest,
+  registerUser,
+  loginUser,
+  logout,
+  revokeAllSessions,
+  issuePasswordReset,
+  resetPasswordWithToken,
+} from './auth';
+import { config } from './config';
 import { auditLog, idempotent, type AuditActor } from './audit';
 import { getVapidKeys, saveSubscription, type PushSubscription, sendPush } from './push';
 
 type AuthedRequest = FastifyRequest & { user?: { id: number; email: string } };
+
+function cookieValue(req: FastifyRequest): string | undefined {
+  const raw = req.headers.cookie;
+  if (!raw) return undefined;
+  const match = raw.split(';').map((p) => p.trim()).find((p) => p.startsWith(`${SESSION_COOKIE}=`));
+  return match ? decodeURIComponent(match.slice(SESSION_COOKIE.length + 1)) : undefined;
+}
 
 function actorFor(req: FastifyRequest): AuditActor {
   const authed = req as AuthedRequest;
@@ -43,8 +61,11 @@ function asBody(req: FastifyRequest): Record<string, unknown> {
   return (req.body ?? {}) as Record<string, unknown>;
 }
 
-export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
-  const fail = (reply: FastifyReply, err: Error) => reply.code(400).send({ error: err.message });
+export async function registerRoutes(app: FastifyInstance, ctx: AppContext) {
+  await app.register(cookie);
+
+  const fail = (reply: FastifyReply, err: Error, code = 400) =>
+    reply.code(code).send({ error: err.message });
   const handle = (fn: () => Promise<unknown>) => async (_req: FastifyRequest, reply: FastifyReply) => {
     try {
       return await fn();
@@ -58,61 +79,168 @@ export function registerRoutes(app: FastifyInstance, ctx: AppContext) {
     '/api/health',
     '/api/auth/register',
     '/api/auth/login',
+    '/api/auth/forgot',
+    '/api/auth/reset',
     '/api/push/vapid',
   ]);
+
+  // SameSite=Strict already stops cross-site cookie sends; Origin/Sec-Fetch-Site
+  // validation is defense-in-depth for cookie-authenticated mutations.
+  function isSameOrigin(req: FastifyRequest): boolean {
+    const fetchSite = req.headers['sec-fetch-site'];
+    if (fetchSite === 'same-origin' || fetchSite === 'none') return true;
+    const origin = req.headers.origin;
+    if (typeof origin !== 'string' || origin === '') return true; // non-browser client
+    return config.corsOrigins.includes(origin) || origin === `${req.protocol}://${req.hostname}`;
+  }
+
   app.addHook('preHandler', async (req: FastifyRequest, reply: FastifyReply) => {
     const publicRoute = PUBLIC_PATHS.has(req.url.split('?')[0]) || req.url.startsWith('/api/lightning/webhook');
     if (publicRoute) return;
-    const user = getSessionUser(ctx.db, req.headers.authorization);
+
+    const user = getUserFromRequest(ctx.db, {
+      authHeader: req.headers.authorization,
+      cookieValue: cookieValue(req),
+    });
     if (!user) {
       reply.code(401).send({ error: 'Unauthorized' });
       return;
     }
+
+    // CSRF: every state-changing request that rides on the session cookie must
+    // originate from our own site.
+    if (cookieValue(req) && !['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !isSameOrigin(req)) {
+      reply.code(403).send({ error: 'Cross-site request blocked' });
+      return;
+    }
+
     (req as FastifyRequest & { user?: typeof user }).user = user;
   });
 
   app.get('/api/health', () => ({ ok: true, time: new Date().toISOString() }));
 
   // Authentication
-  app.post('/api/auth/register', async (req: FastifyRequest, reply: FastifyReply) => {
+  function setSessionCookie(reply: FastifyReply, token: string) {
+    reply.setCookie(SESSION_COOKIE, token, {
+      httpOnly: true,
+      secure: config.cookieSecure,
+      sameSite: 'strict',
+      path: '/',
+      maxAge: config.authSessionTtlMs / 1000,
+    });
+  }
+
+  function clearSessionCookie(reply: FastifyReply) {
+    reply.clearCookie(SESSION_COOKIE, { path: '/' });
+  }
+
+  const authSchemas = {
+    body: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['email', 'password'],
+      properties: {
+        email: { type: 'string', format: 'email', maxLength: 254 },
+        password: { type: 'string', minLength: 1, maxLength: 1024 },
+      },
+    },
+  };
+
+  app.post('/api/auth/register', {
+    schema: {
+      body: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['email', 'password'],
+        properties: {
+          email: { type: 'string', format: 'email', maxLength: 254 },
+          password: { type: 'string', minLength: 1, maxLength: 1024 },
+          displayName: { type: 'string', maxLength: 80 },
+        },
+      },
+    },
+  }, async (req: FastifyRequest, reply: FastifyReply) => {
     const body = asBody(req);
-    const email = String(body.email ?? '').trim().toLowerCase();
+    const email = String(body.email ?? '');
     const password = String(body.password ?? '');
     const displayName = String(body.displayName ?? '').trim();
-    if (!email || !password) return fail(reply, new Error('email and password are required'));
-    if (password.length < 8) return fail(reply, new Error('password must be at least 8 characters'));
-    try {
-      const info = ctx.db.prepare('INSERT INTO users (email, password_hash, display_name, created_at) VALUES (?, ?, ?, ?)')
-        .run(email, hashPassword(password), displayName, new Date().toISOString());
-      const token = createUserToken(ctx.db, Number(info.lastInsertRowid));
-      return { token, user: { email, displayName } };
-    } catch {
-      return fail(reply, new Error('email is already registered'));
-    }
+    const result = registerUser(ctx.db, email, password, displayName);
+    if (!result.ok) return fail(reply, new Error(result.error));
+    setSessionCookie(reply, result.token);
+    auditLog(ctx.db, actorFor(req), 'auth.register', { email: result.user.email });
+    return { user: { email: result.user.email, displayName: result.user.display_name } };
   });
 
-  app.post('/api/auth/login', async (req: FastifyRequest, reply: FastifyReply) => {
+  app.post('/api/auth/login', { schema: authSchemas }, async (req: FastifyRequest, reply: FastifyReply) => {
     const body = asBody(req);
-    const email = String(body.email ?? '').trim().toLowerCase();
+    const email = String(body.email ?? '');
     const password = String(body.password ?? '');
-    const user = ctx.db.prepare('SELECT * FROM users WHERE email = ?').get(email) as
-      | { id: number; email: string; password_hash: string; display_name: string }
-      | undefined;
-    if (!user || !verifyPassword(password, user.password_hash)) {
-      return fail(reply, new Error('invalid email or password'));
+    const result = loginUser(ctx.db, email, password, req.ip);
+    if (!result.ok) {
+      auditLog(ctx.db, actorFor(req), 'auth.login.failed', { email: email.toLowerCase(), statusCode: result.statusCode });
+      return fail(reply, new Error(result.error), result.statusCode === 429 ? 429 : 400);
     }
-    const token = createUserToken(ctx.db, user.id);
-    return { token, user: { email: user.email, displayName: user.display_name } };
+    setSessionCookie(reply, result.token);
+    auditLog(ctx.db, actorFor(req), 'auth.login', { email: result.user.email });
+    return { user: { email: result.user.email, displayName: result.user.display_name } };
   });
 
   app.post('/api/auth/logout', async (req: FastifyRequest, reply: FastifyReply) => {
-    logout(ctx.db, req.headers.authorization);
+    const authed = req as AuthedRequest;
+    logout(ctx.db, req.headers.authorization, cookieValue(req));
+    clearSessionCookie(reply);
+    auditLog(ctx.db, actorFor(req), 'auth.logout', authed.user ? { email: authed.user.email } : {});
+    return { ok: true };
+  });
+
+  app.post('/api/auth/logout-all', async (req: FastifyRequest, reply: FastifyReply) => {
+    const authed = req as AuthedRequest;
+    if (authed.user?.id == null) return reply.code(401).send({ error: 'Unauthorized' });
+    revokeAllSessions(ctx.db, authed.user.id);
+    clearSessionCookie(reply);
+    auditLog(ctx.db, actorFor(req), 'auth.logout_all', { userId: authed.user.id });
     return { ok: true };
   });
 
   app.get('/api/auth/me', async (req: FastifyRequest & { user?: unknown }, reply: FastifyReply) => {
     if (!req.user) return reply.code(401).send({ error: 'Unauthorized' });
     return { user: req.user };
+  });
+
+  app.post('/api/auth/forgot', async (req: FastifyRequest, reply: FastifyReply) => {
+    const body = asBody(req);
+    const email = String(body.email ?? '').trim().toLowerCase();
+    if (!email) return fail(reply, new Error('email is required'));
+    const { issued, token } = issuePasswordReset(ctx.db, email);
+    auditLog(ctx.db, actorFor(req), 'auth.forgot', { email, issued });
+    // Respond identically whether or not the account exists (no enumeration).
+    if (config.authExposeResetToken && token) {
+      // Pre-email-provider mode: surface the token so the flow is testable end-to-end.
+      return { ok: true, resetToken: token };
+    }
+    return { ok: true };
+  });
+
+  app.post('/api/auth/reset', {
+    schema: {
+      body: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['token', 'password'],
+        properties: {
+          token: { type: 'string', minLength: 20, maxLength: 128 },
+          password: { type: 'string', minLength: 1, maxLength: 1024 },
+        },
+      },
+    },
+  }, async (req: FastifyRequest, reply: FastifyReply) => {
+    const body = asBody(req);
+    const token = String(body.token ?? '');
+    const password = String(body.password ?? '');
+    const result = resetPasswordWithToken(ctx.db, token, password);
+    if (!result.ok) return fail(reply, new Error(result.error));
+    auditLog(ctx.db, actorFor(req), 'auth.reset');
+    return { ok: true };
   });
 
   // Push notifications

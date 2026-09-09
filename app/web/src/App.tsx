@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, getToken, subscribeToPush, type Balances, type PricePoint, type PriceQuote, type Transaction } from './api';
+import { api, subscribeToPush, type Balances, type PricePoint, type PriceQuote, type Transaction } from './api';
 import Dashboard from './screens/Dashboard';
 import Retirement from './screens/Retirement';
 import Payments from './screens/Payments';
@@ -25,18 +25,14 @@ export default function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [apiError, setApiError] = useState<string | null>(null);
 
-  // Establish auth on first load: if a stored token is valid, enter the app.
+  // Establish auth on first load: if the session cookie is valid, enter the app.
   useEffect(() => {
-    if (!getToken()) {
-      setAuthed(false);
-      return;
-    }
+    let cancelled = false;
     api
       .me()
-      .then(() => setAuthed(true))
-      .catch(() => {
-        setAuthed(false);
-      });
+      .then(() => { if (!cancelled) setAuthed(true); })
+      .catch(() => { if (!cancelled) setAuthed(false); });
+    return () => { cancelled = true; };
   }, []);
 
   const refresh = useCallback(async () => {

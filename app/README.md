@@ -52,11 +52,15 @@ address from a locally generated mnemonic, syncs balance/UTXOs, and signs/sweeps
 
 ## API surface
 
-All endpoints below are **authenticated** via `Authorization: Bearer <token>` (except health,
-auth register/login, the public VAPID key, and the lightning webhook).
+All endpoints below are **authenticated** via an HttpOnly `ttm_session` cookie (set on
+register/login). Bearer `Authorization: Bearer <token>` still works for non-browser API clients.
+Only health, auth register/login/forgot/reset, the public VAPID key, and the lightning webhook
+are unauthenticated.
 
 - `GET /api/health`
-- `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`
+- `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`,
+  `POST /api/auth/logout-all`, `GET /api/auth/me`,
+  `POST /api/auth/forgot`, `POST /api/auth/reset`
 - `GET /api/push/vapid` (public), `POST /api/push/subscribe`
 - `GET /api/price` — live quote + 30-day history
 - `GET /api/wallet`, `POST /api/wallet/add|buy|sell`, `GET /api/wallet/deposit`
@@ -82,16 +86,24 @@ See `docs/implementation-plan.md` in the repo root for the full feature map.
 
 ## Security
 
-- **Authentication**: scrypt password hashing (per-user salt) + random bearer session tokens
-  (stored hashed, 7-day expiry).
+- **Authentication**: scrypt password hashing (per-user salt) inside an HttpOnly `SameSite=Strict`
+  cookie (7-day expiry) — immune to XSS token theft. CSRF is blocked at the API layer by
+  Origin/`Sec-Fetch-Site` validation on cookie-authenticated mutations (defense-in-depth on top
+  of SameSite).
+- **Password policy**: min 10 chars (configurable), requires lowercase + uppercase + number +
+  symbol, rejects a list of common passwords. Enforced on register and reset.
+- **Lockout**: repeated failed logins from the same account+IP lock that pair for 15 min
+  (`AUTH_MAX_LOGIN_ATTEMPTS` / `AUTH_LOCKOUT_MS`), with timing-uniform responses for unknown
+  accounts (no account enumeration).
+- **Reset flow**: one-time, expiring (1h) reset tokens; resetting revokes all sessions.
 - **Encryption at rest**: the HD-wallet mnemonic is stored AES-256-GCM encrypted. The key comes
   from `WALLET_KEY` if set, else a `server/data/server.key` file generated on first boot. Legacy
   plaintext mnemonics migrate automatically.
 - **Transport hardening**: `@fastify/helmet` (X-Frame-Options, nosniff, etc.), `@fastify/rate-limit`
-  (300 req/min, drop idle sessions), `@fastify/cors` (locked down via `CORS_ORIGINS`), and a 1 MiB
-  body cap.
-- Production should run HTTPS (required for browser push) and set `WALLET_KEY`, `VAPID_PUBLIC_KEY`,
-  `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`.
+  (300 req/min), `@fastify/cors` (locked down via `CORS_ORIGINS`), and a 1 MiB body cap.
+- Production should run HTTPS (required for cookies to be `Secure` and for browser push) and set
+  `WALLET_KEY`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, `AUTH_PEPPER`, and
+  `AUTH_EXPOSE_RESET_TOKEN=0`.
 
 ## PWA & Push
 

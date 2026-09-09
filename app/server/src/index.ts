@@ -8,6 +8,7 @@ import { registerRoutes } from './routes';
 import { runDue } from './services/dca';
 import { syncOnchain } from './services/onchain';
 import { sendPush } from './push';
+import { cleanupExpiredSessions } from './auth';
 
 async function main() {
   const ctx = createContext();
@@ -17,10 +18,11 @@ async function main() {
     contentSecurityPolicy: false, // Vite dev + inline styles from the UI
     crossOriginEmbedderPolicy: false,
   });
-  // CORS: only allow the configured frontend origin(s). Empty = same-origin only.
+  // CORS: same-origin by default; when origins are configured, allow credentialed
+  // cookie-based auth from those exact origins.
   await app.register(cors, {
     origin: config.corsOrigins.length ? config.corsOrigins : false,
-    credentials: false,
+    credentials: config.corsOrigins.length > 0,
   });
   // Throttle API abuse; the global limit covers auth brute-force too.
   await app.register(rateLimit, {
@@ -29,7 +31,7 @@ async function main() {
     timeWindow: '1 minute',
   });
 
-  registerRoutes(app, ctx);
+  await registerRoutes(app, ctx);
 
   await app.listen({ port: config.port, host: config.host });
   console.log(`\n[to-the-moon] API ready at http://${config.host}:${config.port}/api`);
@@ -55,6 +57,9 @@ async function main() {
       })
       .catch((err) => console.error('[dca] error:', err));
   }, config.dcaIntervalMs);
+
+  // Daily janitor: drop expired sessions.
+  setInterval(() => cleanupExpiredSessions(ctx.db), 24 * 60 * 60 * 1000);
 }
 
 main().catch((err) => {
